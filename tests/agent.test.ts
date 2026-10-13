@@ -22,6 +22,14 @@ const setup = () => {
 };
 async function advance(principal: Principal, run: AgentRun) { return store.command(principal,run.id,{ action:'advance',revision:run.revision },randomUUID()); }
 describe('Opportunity Agent',()=>{
+  it('authenticates returning users, rejects wrong passwords and expires sessions',()=>{
+    const account=setup();
+    expect(()=>store.login({ email:'first@example.test',password:'wrong-test-password' })).toThrow('incorrect');
+    const login=store.login({ email:'first@example.test',password:'test-password-12345' });
+    expect(login.principal.tenantId).toBe(account.principal.tenantId);
+    store.db.prepare('UPDATE sessions SET expires=0 WHERE user_id=?').run(account.principal.userId);
+    expect(()=>store.session(login.token)).toThrow('Sign in');
+  });
   it('persists the entire approved workflow, receipts, follow-ups and audit',async()=>{
     const { principal } = setup(); let run = store.createRun(principal,{ goal:'Prepare opportunities for review' },randomUUID());
     for (let i=0;i<3;i++) run = await advance(principal,run);

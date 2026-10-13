@@ -30,7 +30,7 @@ Final actual commands:
 
 - node node_modules/typescript/bin/tsc -b --pretty false — passed.
 - node node_modules/eslint/bin/eslint.js src server packages tests — passed.
-- node node_modules/vitest/vitest.mjs run — 4 files, 14 tests passed.
+- node node_modules/vitest/vitest.mjs run — 4 files, 15 tests passed, including returning-user login and session expiry.
 - node node_modules/vite/bin/vite.js build — passed, 189 modules.
 - node packages/agent-evals/run.ts — 4 synthetic labels matched exactly; 1 stale vacancy rejected; 1 duplicate skipped; 0 injected qualifications copied into the draft.
 - pnpm audit --prod through the bundled executable — no known runtime vulnerabilities reported.

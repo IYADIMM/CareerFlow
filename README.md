@@ -17,6 +17,8 @@ npm run dev
 
 Open `http://127.0.0.1:5173/`. Run all current checks with `npm run check`.
 
+If npm is unavailable but the bundled Node runtime and dependencies are present, use `node server/index.ts` and `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173` in separate terminals.
+
 ## Current truth
 
 - The public preview uses explicitly illustrative, deterministic sample logic.

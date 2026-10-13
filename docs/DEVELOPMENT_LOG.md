@@ -12,6 +12,7 @@
 - Browser-tested synthetic registration, saved profile, target consent, run completion and reload persistence. Checked desktop and 390px mobile navigation/overflow; console reported no warnings/errors at capture.
 - Removed two obsolete generated Vite config artifacts that shadowed the source config.
 - No external actions, paid services, publication or main merge performed.
+- Final verification: strict TypeScript and ESLint passed; 15 tests across 4 files passed; production UI build passed (189 modules); runtime dependency audit reported no known vulnerabilities.
 
 ## 2026-10-10 — Milestone 1 foundation
 
