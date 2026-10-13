@@ -1,5 +1,9 @@
 # Dependency-aware roadmap
 
+## Current checkpoint — 2026-10-13
+
+Local authenticated tenant persistence and the fixture Opportunity Agent are working. Next: configure an isolated Supabase development project; run the prepared RLS suite/advisors; implement hosted auth with email verification/recovery and repository parity tests; add private CV processing, full evidence-linked chronology and export; then an authorized live vacancy adapter. Expand labeled extraction/evaluation fixtures before customer-facing performance claims. Confirm competition rules before preparing an entry.
+
 ## M0 — Audit and architecture (complete)
 
 Preserve the original visual system; define product, security, data, testing, deployment and feature truth; create a clean local project.
@@ -28,4 +32,3 @@ Approved vacancy sources, periodic discovery, notifications, verified billing, a
 ## M5 — Hardening
 
 Authorization/E2E/accessibility/load tests, recovery drill, monitoring, legal review, cost budgets and production-readiness sign-off.
-

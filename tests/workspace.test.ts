@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { emptyWorkspace, loadWorkspace, makeProfile, profileCompleteness, saveWorkspace } from '../src/lib/workspace';
 
 describe('workspace repository', () => {
+  it('preserves profile identity and evidence when editing the existing record', () => {
+    const input={ displayName:'Demo',email:'demo@example.test',currentRole:'Director',yearsExperience:11,targetRole:'Director',location:'Dubai',workMode:'hybrid' as const,objective:'Lead a regional team',skills:['Negotiation'] };
+    const original=makeProfile(input); original.skills[0].status='verified';
+    const edited=makeProfile({ ...input,displayName:'Demo Updated',skills:['Negotiation','Procurement'] },original);
+    expect(edited.id).toBe(original.id); expect(edited.skills[0]).toEqual(original.skills[0]); expect(edited.skills[1].status).toBe('user_declared');
+  });
   it('falls back safely when persisted data is malformed', () => {
     const storage = { getItem: () => '{bad json' };
     expect(loadWorkspace(storage)).toEqual(emptyWorkspace);
@@ -20,4 +26,3 @@ describe('workspace repository', () => {
     expect(profileCompleteness(profile)).toBe(100);
   });
 });
-

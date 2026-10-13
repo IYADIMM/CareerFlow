@@ -38,4 +38,3 @@ Upload these three files to a static host, or set Netlify publish directory to t
 ## Next integration
 
 Move the content into the CareerFlow AI React/Vite repository as dedicated page components. Keep the three canvas renderers isolated in hooks or modules, and clean up listeners/RAF loops on unmount. Match the same design tokens in your shared UI system.
-

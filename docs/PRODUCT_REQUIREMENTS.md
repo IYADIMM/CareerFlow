@@ -30,4 +30,3 @@ CareerFlow AI is a connected career operating system for individuals, executives
 - The command center reflects persisted profile progress and actionable recommendations.
 - The ten-stage journey is navigable and available in a linear accessible layout.
 - A Supabase-compatible tenant schema and RLS policies are reviewable but not applied automatically.
-

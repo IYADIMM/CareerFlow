@@ -9,10 +9,14 @@
 | Career Digital Twin | Partial foundation | Evidence status represented; server history and inferred-skill review remain |
 | Smart actions | Working locally | Completion persists; orchestration is deterministic |
 | Ten-stage journey | Working locally | Accessible progress map; only Stage 1 workflow is active |
-| Authentication | Requires integration | UI is explicitly local; Supabase Auth not connected |
-| Tenant isolation | Designed, not deployed | Migration includes RLS; requires a Supabase development project and tests |
-| CV, vacancy, matching, applications | Planned next milestone | No misleading live controls exposed |
+| Authentication | Working locally | Salted password hashes, HttpOnly sessions, logout and expiry; production email/recovery pending |
+| Tenant isolation | Working locally | Server derives tenant from session membership; HTTP and repository authorization tests pass |
+| Supabase RLS | Corrected, unexecuted | Closed agency access and immutable ownership grants; prepared SQL suite requires a development project |
+| CV text intake | Working locally | Heading detection, source review and verification; PDF/DOCX processing pending |
+| Manual matching/applications | Working locally | User-supplied text, deterministic estimates, status pipeline and persisted interview notes |
+| Opportunity Agent | Working locally with mock sources | Consented radar, persistent lifecycle, draft hashes, approvals, receipts and follow-ups |
+| Real vacancy discovery | Requires integration | Synthetic source adapter only; no live URL or availability claims |
+| Truthful CV tailoring | Partial working local baseline | Profile-based evidence draft; full employment chronology and document export pending |
 | AI | Requires external integration | Provider keys absent; deterministic public demo is not AI |
 | Billing | Planned / disabled | Prices are labeled hypotheses; no checkout or transactions |
 | Agency/admin | Architecture only | Requires authenticated tenant foundation |
-

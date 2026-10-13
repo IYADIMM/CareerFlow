@@ -341,4 +341,3 @@
   dialog?.addEventListener('close',()=>{document.body.classList.remove('dialog-open');lastFocus?.focus?.()});
   $('#preview-platform-link')?.addEventListener('click',closePreview);
 })();
-

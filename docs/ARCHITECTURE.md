@@ -1,5 +1,13 @@
 # Architecture
 
+## 2026-10-13 additions
+
+The UI now supports browser demo storage and an authenticated loopback SQLite API. Session restoration completes before displaying a workspace; authenticated records never fall back to browser storage. Profile edits preserve identity and existing skill evidence, while serialized writes and revision checks prevent silent overwrites.
+
+Reusable agent packages separate core lifecycle/tool interfaces, policy, source adapters and evaluations. CareerFlow adapters have no dependency on CategoryFlow. The local action executor records approved preparation; it has no external submission, account, messaging or paid-model adapter. All run state, approvals, receipts, follow-ups and audit events persist in server storage.
+
+Production still targets the PostgreSQL/Supabase architecture below. SQLite and local passwords are a development adapter, not the Netlify production database/auth implementation.
+
 ## Current shape
 
 The project is a Vite multi-page build. `index.html`, `styles.css`, and `main.js` retain the cinematic public experience. `app.html` mounts a React/TypeScript application with hash routing so static hosting needs no rewrite. A typed local repository validates persisted state with Zod.
@@ -29,4 +37,3 @@ Each intelligence module owns a versioned prompt, Zod input/output schema, token
 ## Evolution
 
 Replace the local repository behind the existing UI contract with authenticated APIs. The database migration is the target persistence model; no schema-generated types are committed until a real development project exists.
-

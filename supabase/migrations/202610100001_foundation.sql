@@ -96,13 +96,20 @@ create table public.audit_events (
 );
 create index audit_events_org_created_idx on public.audit_events(organization_id, created_at desc);
 
-create or replace function public.is_org_member(org_id uuid)
-returns boolean language sql stable security definer set search_path = public
-as $$ select exists(select 1 from public.organization_memberships m where m.organization_id = org_id and m.user_id = auth.uid()) $$;
-
-create or replace function public.has_org_role(org_id uuid, allowed public.membership_role[])
-returns boolean language sql stable security definer set search_path = public
-as $$ select exists(select 1 from public.organization_memberships m where m.organization_id = org_id and m.user_id = auth.uid() and m.role = any(allowed)) $$;
+-- Unapplied foundation corrected on 2026-10-13. Agency access is closed pending
+-- explicit assignment/consent workflows. Organization admins do not inherit CV access.
+create schema if not exists private;
+revoke all on schema private from public, anon;
+grant usage on schema private to authenticated;
+create or replace function private.is_org_member(org_id uuid, writable boolean default false)
+returns boolean language sql stable security definer set search_path = ''
+as $$ select auth.uid() is not null and exists(
+  select 1 from public.organization_memberships m
+  where m.organization_id = org_id and m.user_id = auth.uid()
+    and (not writable or m.role <> 'viewer')
+) $$;
+revoke all on function private.is_org_member(uuid, boolean) from public, anon;
+grant execute on function private.is_org_member(uuid, boolean) to authenticated;
 
 alter table public.profiles enable row level security;
 alter table public.organizations enable row level security;
@@ -111,35 +118,47 @@ alter table public.career_profiles enable row level security;
 alter table public.career_profile_skills enable row level security;
 alter table public.recommendation_records enable row level security;
 alter table public.audit_events enable row level security;
+alter table public.skills enable row level security;
 
-create policy "profile owner reads" on public.profiles for select using (user_id = auth.uid());
-create policy "profile owner updates" on public.profiles for update using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "members read organizations" on public.organizations for select using (public.is_org_member(id));
-create policy "members read memberships" on public.organization_memberships for select using (public.is_org_member(organization_id));
-create policy "admins manage memberships" on public.organization_memberships for all
-using (public.has_org_role(organization_id, array['owner','administrator']::public.membership_role[]))
-with check (public.has_org_role(organization_id, array['owner','administrator']::public.membership_role[]));
-create policy "members read career profiles" on public.career_profiles for select using (public.is_org_member(organization_id));
-create policy "members create own career profile" on public.career_profiles for insert with check (owner_user_id = auth.uid() and public.is_org_member(organization_id));
-create policy "owners or coaches update career profiles" on public.career_profiles for update
-using (owner_user_id = auth.uid() or public.has_org_role(organization_id, array['owner','administrator','coach']::public.membership_role[]))
-with check (owner_user_id = auth.uid() or public.has_org_role(organization_id, array['owner','administrator','coach']::public.membership_role[]));
-create policy "members read profile skills" on public.career_profile_skills for select using (
-  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and public.is_org_member(cp.organization_id))
+create policy "profile owner reads" on public.profiles for select to authenticated using (user_id = (select auth.uid()));
+create policy "profile owner inserts" on public.profiles for insert to authenticated with check (user_id = (select auth.uid()));
+create policy "profile owner updates" on public.profiles for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+create policy "members read organizations" on public.organizations for select to authenticated using (private.is_org_member(id));
+create policy "members read memberships" on public.organization_memberships for select to authenticated using (private.is_org_member(organization_id));
+create policy "owners read career profiles" on public.career_profiles for select to authenticated
+using (owner_user_id = (select auth.uid()) and private.is_org_member(organization_id));
+create policy "members create own career profile" on public.career_profiles for insert to authenticated
+with check (owner_user_id = (select auth.uid()) and private.is_org_member(organization_id, true));
+create policy "owners update career profiles" on public.career_profiles for update to authenticated
+using (owner_user_id = (select auth.uid()) and private.is_org_member(organization_id, true))
+with check (owner_user_id = (select auth.uid()) and private.is_org_member(organization_id, true));
+create policy "owners read profile skills" on public.career_profile_skills for select to authenticated using (
+  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and cp.owner_user_id = (select auth.uid()) and private.is_org_member(cp.organization_id))
 );
-create policy "profile owners manage skills" on public.career_profile_skills for all using (
-  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and cp.owner_user_id = auth.uid())
+create policy "profile owners manage skills" on public.career_profile_skills for all to authenticated using (
+  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and cp.owner_user_id = (select auth.uid()) and private.is_org_member(cp.organization_id, true))
 ) with check (
-  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and cp.owner_user_id = auth.uid())
+  exists(select 1 from public.career_profiles cp where cp.id = career_profile_id and cp.owner_user_id = (select auth.uid()) and private.is_org_member(cp.organization_id, true))
 );
-create policy "members read recommendations" on public.recommendation_records for select using (public.is_org_member(organization_id));
-create policy "members update recommendations" on public.recommendation_records for update using (public.is_org_member(organization_id)) with check (public.is_org_member(organization_id));
-create policy "admins read audit events" on public.audit_events for select using (
-  public.has_org_role(organization_id, array['owner','administrator']::public.membership_role[])
+create policy "owners read recommendations" on public.recommendation_records for select to authenticated using (
+  private.is_org_member(organization_id) and exists(select 1 from public.career_profiles cp where cp.id=career_profile_id and cp.organization_id=recommendation_records.organization_id and cp.owner_user_id=(select auth.uid()))
 );
+create policy "owners update recommendations" on public.recommendation_records for update to authenticated
+using (private.is_org_member(organization_id,true) and exists(select 1 from public.career_profiles cp where cp.id=career_profile_id and cp.organization_id=recommendation_records.organization_id and cp.owner_user_id=(select auth.uid())))
+with check (private.is_org_member(organization_id,true) and exists(select 1 from public.career_profiles cp where cp.id=career_profile_id and cp.organization_id=recommendation_records.organization_id and cp.owner_user_id=(select auth.uid())));
+create policy "actors read own audit events" on public.audit_events for select to authenticated
+using (actor_user_id = (select auth.uid()) and private.is_org_member(organization_id));
+create policy "authenticated read skill catalog" on public.skills for select to authenticated using (true);
 
-revoke all on function public.is_org_member(uuid) from public;
-revoke all on function public.has_org_role(uuid, public.membership_role[]) from public;
-grant execute on function public.is_org_member(uuid) to authenticated;
-grant execute on function public.has_org_role(uuid, public.membership_role[]) to authenticated;
-
+-- Table grants are part of the access model; freeze ownership columns on UPDATE.
+revoke all on public.profiles,public.organizations,public.organization_memberships,
+public.career_profiles,public.skills,public.career_profile_skills,public.recommendation_records,public.audit_events from anon,authenticated;
+grant select,insert on public.profiles to authenticated;
+grant update(display_name,locale,updated_at) on public.profiles to authenticated;
+grant select on public.organizations,public.organization_memberships,public.skills,public.audit_events to authenticated;
+grant select,insert on public.career_profiles to authenticated;
+grant update(current_role,years_experience,target_role,location_preference,work_mode,objective,version,updated_at) on public.career_profiles to authenticated;
+grant select,insert,delete on public.career_profile_skills to authenticated;
+grant update(status,confidence,evidence,accepted_at,rejected_at) on public.career_profile_skills to authenticated;
+grant select on public.recommendation_records to authenticated;
+grant update(status,snoozed_until,updated_at) on public.recommendation_records to authenticated;

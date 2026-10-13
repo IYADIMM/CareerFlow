@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   plugins: [react()],
+  server: { host: '127.0.0.1', proxy: { '/api': 'http://127.0.0.1:8787' } },
   build: {
     rollupOptions: {
       input: {
@@ -14,4 +15,3 @@ export default defineConfig({
   },
   test: { environment: 'jsdom', setupFiles: './tests/setup.ts' },
 });
-

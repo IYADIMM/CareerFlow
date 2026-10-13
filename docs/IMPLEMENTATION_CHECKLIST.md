@@ -10,6 +10,17 @@
 - [x] Tenant-ready database and RLS foundation
 - [x] Setup, security, testing and deployment documentation
 - [ ] Supabase development auth and membership tests
+- [x] Local authenticated tenant persistence and session tests
+- [x] Stable profile identity and evidence-preserving edits
+- [x] Corrected unapplied RLS and immutable ownership grants
+- [x] Reusable TypeScript agent package boundaries
+- [x] Fixture Opportunity Agent, checkpoints, approval hashes and verified receipts
+- [x] Target Company Radar consent and fixture persistence
+- [x] Repeatable synthetic extraction/injection evaluations
+- [x] Desktop/mobile local agent browser demonstration
+- [ ] Live PostgreSQL RLS execution and advisors
+- [ ] Real permitted source adapter and larger labeled dataset
+- [ ] Hosted identity, email verification and recovery
 - [ ] Private CV storage, parsing and verification
 - [ ] Vacancy import and evidence-linked matching
 - [ ] Seniority protection engine
@@ -19,4 +30,3 @@
 - [ ] Approved billing provider
 - [ ] Agency and admin workflows
 - [ ] Production hardening and legal review
-

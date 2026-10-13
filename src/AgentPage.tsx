@@ -1,0 +1,63 @@
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import type { WorkspaceState } from './types';
+import type { AgentRun } from '../packages/agent-core/index.ts';
+import { api, setSession } from './lib/api';
+import type { DevSession } from './lib/api';
+
+interface Props { workspace: WorkspaceState; session: DevSession | null; connect(session: DevSession): Promise<void>; disconnect(): void }
+interface Radar { roles: string[]; companies: Array<{ id: 'meridian' | 'horizon'; name: string; source: 'fixture'; enabled: boolean }>; salary?: { annual: number; currency: string }; consent: true }
+interface Audit { id: number; action: string; at: string; details: string }
+export function AgentPage({ workspace,session,connect,disconnect }: Props) {
+  const [email,setEmail] = useState(''), [password,setPassword] = useState('');
+  const [runs,setRuns] = useState<AgentRun[]>([]), [audit,setAudit] = useState<Audit[]>([]);
+  const [roles,setRoles] = useState('Commercial Director, Commercial Assistant');
+  const [companies,setCompanies] = useState(['meridian','horizon']);
+  const [salary,setSalary] = useState(''), [consent,setConsent] = useState(false);
+  const [targetsSaved,setTargetsSaved] = useState(false), [busy,setBusy] = useState(false), [error,setError] = useState(''), [feedback,setFeedback] = useState('');
+  const refresh = async () => { const [nextRuns,nextAudit] = await Promise.all([api<AgentRun[]>('/runs'),api<Audit[]>('/audit')]); setRuns(nextRuns); setAudit(nextAudit); };
+  useEffect(() => {
+    if (!session) { setRuns([]); setAudit([]); setTargetsSaved(false); return; }
+    let active = true;
+    Promise.all([api<Radar | null>('/radar'),api<AgentRun[]>('/runs'),api<Audit[]>('/audit')]).then(([radar,nextRuns,nextAudit]) => {
+      if (!active) return;
+      setRuns(nextRuns); setAudit(nextAudit);
+      if (radar) { setRoles(radar.roles.join(', ')); setCompanies(radar.companies.filter(company=>company.enabled).map(company=>company.id)); setSalary(String(radar.salary?.annual || '')); setConsent(true); setTargetsSaved(true); }
+    }).catch(reason => { if (active) setError(reason.message); });
+    return () => { active = false; };
+  },[session]);
+  const task = async (work: () => Promise<void>) => { if (busy) return; setBusy(true); setError(''); setFeedback(''); try { await work(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Action failed.'); } finally { setBusy(false); } };
+  const signIn = (register: boolean) => task(async () => {
+    const next = await api<DevSession>(`/auth/${register ? 'register':'login'}`,'POST',{ email,password }); setSession(next); await connect(next); setPassword(''); setFeedback('Signed in to your personal development workspace.');
+  });
+  const saveRadar = (event: FormEvent) => {
+    event.preventDefault(); void task(async () => {
+      const radar: Radar = { roles: roles.split(',').map(role=>role.trim()).filter(Boolean), companies: [{ id:'meridian',name:'Demo Meridian',source:'fixture',enabled:companies.includes('meridian') },{ id:'horizon',name:'Demo Horizon',source:'fixture',enabled:companies.includes('horizon') }], ...(salary ? { salary:{ annual:Number(salary),currency:'AED' } } : {}), consent:true };
+      if (!consent) throw new Error('Consent is required before reading profile and target data.');
+      await api('/radar','PUT',radar); setTargetsSaved(true); setFeedback('Consented targets saved to your tenant database.'); await refresh();
+    });
+  };
+  const command = (run: AgentRun, action: string) => task(async () => {
+    await api(`/runs/${run.id}`,'POST',{ action,revision:run.revision, ...(action === 'approve' ? { draftHashes:run.drafts.map(draft=>draft.hash) } : {}) },crypto.randomUUID()); await refresh(); setFeedback(`Run checkpoint saved after ${action}.`);
+  });
+  return <>
+    <header className="page-head"><p className="eyebrow">CAREER OPPORTUNITY AGENT</p><div><h1>A next move you can review.</h1><p>Discover opportunities from synthetic company sources, review the evidence, approve draft preparation, and verify a recorded outcome.</p></div></header>
+    {error && <p className="form-error feedback" role="alert">{error}</p>}
+    <p role="status" aria-live="polite" className="feedback">{busy ? 'Saving and verifying…' : feedback}</p>
+    {!session ? <section className="panel workflow-form auth-panel"><div className="panel-head"><div><p className="eyebrow">AUTHENTICATED DEVELOPMENT WORKSPACE</p><h2>Create an account or sign in</h2></div></div><form onSubmit={event=>{ event.preventDefault(); void signIn(false); }}><div className="form-section"><p className="mode-note">Local accounts use a database on this machine. Start the API with <code>npm run dev:api</code>. Use synthetic details for this development demo.</p><div className="form-grid"><label className="field"><span>Email</span><input type="email" required value={email} autoComplete="username" onChange={event=>setEmail(event.target.value)} /></label><label className="field"><span>Password (12+ characters)</span><input type="password" required minLength={12} value={password} autoComplete="current-password" onChange={event=>setPassword(event.target.value)} /></label></div></div><div className="form-footer"><button type="submit" disabled={busy} className="secondary-action">SIGN IN</button><button type="button" disabled={busy || password.length<12 || !email} className="primary-action" onClick={()=>void signIn(true)}>CREATE LOCAL ACCOUNT ↗</button></div></form></section> : <>
+      <section className="panel account-line"><p>Signed in as <strong>{session.email}</strong> · Personal workspace · SQLite persistence</p><button className="text-action" disabled={busy} onClick={()=>void task(async()=>{ await api('/auth/logout','POST'); setSession(null); disconnect(); })}>SIGN OUT</button></section>
+      {!workspace.profile && <section className="panel"><div className="empty"><div><h2>Start with your career facts.</h2><p>Create your profile in this authenticated workspace before running the agent.</p><Link to="/profile" className="text-action">BUILD CAREER PROFILE ↗</Link></div></div></section>}
+      <form className="panel workflow-form" onSubmit={saveRadar}><div className="panel-head"><div><p className="eyebrow">TARGET COMPANY RADAR / MOCK SOURCES</p><h2>Set a consented search direction</h2></div></div><div className="form-section"><div className="form-grid"><label className="field wide"><span>Target roles (comma separated)</span><input required value={roles} maxLength={500} onChange={event=>{ setRoles(event.target.value); setTargetsSaved(false); }} /></label><label className="field"><span>Target annual cash salary (AED, optional)</span><input type="number" min={1} value={salary} onChange={event=>{ setSalary(event.target.value); setTargetsSaved(false); }} /></label><fieldset className="company-picks"><legend>Companies in the fixture source</legend>{[['meridian','Demo Meridian'],['horizon','Demo Horizon']].map(([id,name])=><label key={id}><input type="checkbox" checked={companies.includes(id)} onChange={event=>{ setCompanies(current=>event.target.checked ? [...current,id] : current.filter(company=>company!==id)); setTargetsSaved(false); }} />{name}</label>)}</fieldset></div><label className="consent"><input type="checkbox" checked={consent} onChange={event=>{ setConsent(event.target.checked); setTargetsSaved(false); }} />I allow this run to read my saved career profile and selected targets to prepare drafts for my review.</label></div><div className="form-footer"><p>Fixture URLs are synthetic. Vacancy availability is not live-verified.</p><button className="primary-action" type="submit" disabled={busy || !consent || !workspace.profile}>SAVE TARGETS + CONSENT</button></div></form>
+      <div className="agent-toolbar"><div><h2>Your agent runs</h2><p>Every action saves a checkpoint. You can leave and resume later.</p></div><button className="primary-action" disabled={busy || !targetsSaved || !workspace.profile} onClick={()=>void task(async()=>{ await api('/runs','POST',{ goal:'Find evidence-supported career opportunities and prepare drafts for review.' },crypto.randomUUID()); await refresh(); })}>CREATE OPPORTUNITY RUN ↗</button></div>
+      {runs.map(run=><article key={run.id} className="panel agent-run"><div className="panel-head"><div><p className="eyebrow">RUN {run.id.slice(0,8)} / REVISION {run.revision}</p><h2>{run.goal}</h2></div><span className="status-chip">{run.state.replaceAll('_',' ')}</span></div><div className="run-content"><div className="lifecycle" aria-label="Agent lifecycle">{['GOAL','PLAN','TOOLS','APPROVAL','EXECUTE','VERIFY'].map(stage=><span key={stage}>{stage}</span>)}</div>{run.plan.length>0 && <ol className="run-plan">{run.plan.map(step=><li key={step}>{step}</li>)}</ol>}<p className="mode-note">{run.duplicates} duplicates skipped · {run.rejectedSources.length} sources rejected · Cost ${((run.usage.costCents || 0)/100).toFixed(2)} / budget $0.00 · Deterministic processing</p>{run.rejectedSources.map(source=><p key={source.id} className="mode-note">{source.id}: {source.reason}</p>)}{run.error && <p role="alert">{run.error}</p>}
+        {run.drafts.map(draft=><section className="draft-review" key={draft.vacancyId}><div><p className="eyebrow">{draft.vacancyId} / ESTIMATED FIT {draft.score}%</p>{draft.seniorityWarning && <p className="warning-box">{draft.seniorityWarning}</p>}<p>{draft.compensation.explanation}</p><h3>Evidence and gaps</h3><ul>{draft.evidence.map(evidence=><li key={evidence}>{evidence}</li>)}</ul><p>{draft.gaps.length ? `Missing evidence: ${draft.gaps.join(', ')}` : 'No gaps among the extracted fixture requirements.'}</p></div><div><h3>Candidate draft for review</h3><pre>{draft.text}</pre><p className="record-meta">DRAFT HASH {draft.hash.slice(0,16)}</p></div></section>)}
+        {run.state==='awaiting_approval' && <div className="approval-box"><h3>Approve these exact draft versions</h3><p>Approval records your review and allows CareerFlow to save preparation receipts. Employer submissions and messages require a supported, separately authorized integration.</p><button className="primary-action" disabled={busy} onClick={()=>void command(run,'approve')}>APPROVE REVIEWED PREPARATION</button></div>}
+        {run.receipts.map(receipt=><p key={receipt.id} className="receipt">{receipt.verified ? 'Verified':'Pending verification'} preparation record · {receipt.vacancyId} · {receipt.id.slice(0,8)}</p>)}{run.followUps.map(followUp=><p key={followUp.vacancyId}>Review due {new Date(followUp.dueAt).toLocaleDateString()}: {followUp.action}</p>)}
+        <div className="checkpoint-list" aria-label="Saved checkpoints">{run.checkpoints.map((checkpoint,index)=><span key={index}>{checkpoint.state.replaceAll('_',' ')}<time>{new Date(checkpoint.at).toLocaleTimeString()}</time></span>)}</div>
+        <div className="run-actions">{['created','planning','ready','executing','verifying'].includes(run.state) && <><button className="primary-action" disabled={busy} onClick={()=>void command(run,'advance')}>{run.state==='ready'?'DISCOVER + PREPARE':run.state==='executing'?'RECORD APPROVED PREPARATION':run.state==='verifying'?'VERIFY OUTCOME':'CONTINUE PLAN'} ↗</button><button className="secondary-action" disabled={busy} onClick={()=>void command(run,'pause')}>PAUSE</button></>}{run.state==='paused' && <button className="primary-action" disabled={busy} onClick={()=>void command(run,'resume')}>RESUME</button>}{!['completed','cancelled','expired'].includes(run.state) && <button className="secondary-action" disabled={busy} onClick={()=>void command(run,'cancel')}>CANCEL RUN</button>}</div>
+      </div></article>)}
+      <section className="panel audit-panel"><div className="panel-head"><div><p className="eyebrow">TENANT AUDIT HISTORY</p><h2>Actions you can trace</h2></div></div><ol>{audit.map(event=><li key={event.id}><span>{event.action}</span><time>{new Date(event.at).toLocaleString()}</time></li>)}</ol></section>
+    </>}
+  </>;
+}

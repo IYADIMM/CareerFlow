@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:api": "node server/index.ts",
+    "eval:agent": "node packages/agent-evals/run.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "check": "tsc -b --pretty false && vitest run && vite build"
+    "lint": "eslint src server packages tests",
+    "check": "tsc -b --pretty false && eslint src server packages tests && vitest run && vite build"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.2",
@@ -24,10 +27,11 @@
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",
+    "eslint": "10.12.0",
     "jsdom": "^27.0.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "8.71.1",
     "vite": "^7.1.9",
     "vitest": "^3.2.4"
   }
 }
-
