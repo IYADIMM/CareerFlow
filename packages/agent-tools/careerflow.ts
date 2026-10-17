@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AgentTool, Draft } from '../agent-core/index.ts';
 import type { CareerProfile } from '../../src/types.ts';
 export interface TargetCompany { id: string; name: string; source: 'fixture'; enabled: boolean }
-export interface SourceVacancy { id: string; company: string; title: string; url: string; publishedAt: string; observedAt: string; description: string; permission: 'fixture' | 'licensed' | 'unknown'; salary?: { annual: number; currency: string } }
+export interface SourceVacancy { id: string; company: string; title: string; url: string; publishedAt: string; observedAt: string; description: string; permission: 'fixture' | 'licensed' | 'unknown'; salary?: { annual: number; currency: string }; sourceVacancyId?:string;location?:string;firstDiscoveredAt?:string;contentVersion?:string;retrieval?:'fixture'|'failed';availability?:'unknown'|'closed'|'expired'; }
 export interface SourceAdapter { id: string; permission: 'fixture' | 'licensed'; discover(companies: TargetCompany[], now: Date): SourceVacancy[] }
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -23,13 +23,15 @@ export const fixtureSource: SourceAdapter = {
       { id: 'demo-assistant', company: 'Demo Horizon', title: 'Commercial Assistant', url: 'https://horizon.example.invalid/jobs/assistant', publishedAt: stamp(3), observedAt: stamp(0), description: 'Support the commercial operations team.\nRequirements: negotiation; procurement.\n\nReport to a team supervisor.', permission: 'fixture' },
       { id: 'demo-expired', company: 'Demo Meridian', title: 'Commercial Manager', url: 'https://meridian.example.invalid/jobs/expired', publishedAt: stamp(65), observedAt: stamp(0), description: 'A historic vacancy.\nRequirements: commercial strategy.\n\nDo not treat as currently available.', permission: 'fixture' },
     ];
-    return records.filter(record => wanted.includes(record.company));
+    return records.filter(record => wanted.includes(record.company)).map(record=>({...record,sourceVacancyId:record.id.replace('-repost',''),location:'Dubai (synthetic)',firstDiscoveredAt:stamp(0),contentVersion:digest(record.description),retrieval:'fixture' as const,availability:record.id==='demo-expired'?'expired' as const:'unknown' as const}));
   },
 };
 export function verifySource(vacancy: SourceVacancy, now: Date): string | null {
   let url: URL;
   try { url = new URL(vacancy.url); } catch { return 'Invalid source URL'; }
   if (vacancy.permission !== 'fixture') return 'A live licensed adapter has not been authorized';
+  if (vacancy.availability==='closed' || vacancy.availability==='expired') return 'Source explicitly marks this fixture closed or expired';
+  if (vacancy.retrieval==='failed') return 'Source retrieval failed; no vacancy content may be invented';
   if (url.protocol !== 'https:' || !url.hostname.endsWith('.example.invalid') || url.username || url.password) return 'Fixture provenance boundary failed';
   const age = (now.getTime() - Date.parse(vacancy.publishedAt)) / 86400_000;
   const observedAge = (now.getTime() - Date.parse(vacancy.observedAt)) / 86400_000;
@@ -41,12 +43,21 @@ export const discoverTool: AgentTool<{ companies: TargetCompany[]; now: Date }, 
   async execute(input) { return fixtureSource.discover(input.companies, input.now); },
 };
 export function deduplicate(records: SourceVacancy[]) {
-  const seen = new Set<string>(); let duplicates = 0;
+  const seen = new Map<string,SourceVacancy>(); let duplicates = 0;
+  const decisions:Array<{id:string;kind:'duplicate'|'reposted'|'updated'|'distinct';originalId?:string}>=[];
   const vacancies = records.filter(record => {
-    const key = digest(`${normalize(record.company)}:${normalize(record.title)}:${normalize(record.description)}`);
-    if (seen.has(key)) { duplicates++; return false; } seen.add(key); return true;
+    // Missing source identifiers are not enough evidence to merge two openings.
+    const key = record.sourceVacancyId ? `${normalize(record.company)}:${record.sourceVacancyId}:${normalize(record.location || '')}` : record.url;
+    const previous=seen.get(key);
+    if (previous) {
+      const kind=previous.description!==record.description?'updated':previous.publishedAt!==record.publishedAt?'reposted':'duplicate';
+      decisions.push({id:record.id,kind,originalId:previous.id}); duplicates++;
+      // Preserve changed source records for human review instead of silently discarding them.
+      return kind==='updated';
+    }
+    decisions.push({id:record.id,kind:'distinct'});seen.set(key,record);return true;
   });
-  return { vacancies, duplicates };
+  return { vacancies, duplicates, decisions };
 }
 function rank(title: string): number | null {
   const terms: Array<[RegExp, number]> = [[/\bchief|\bpresident|\bceo\b/i,6],[/vice president|general manager/i,5],[/director|head of/i,4],[/senior manager|principal/i,3],[/manager/i,2],[/analyst|associate|coordinator/i,1],[/assistant|intern|trainee/i,0]];
@@ -66,5 +77,5 @@ export function prepareDraft(profile: CareerProfile, vacancy: SourceVacancy, tar
   const evidence = [`Name: ${profile.displayName}`, `Current role: ${profile.currentRole}`, `Experience: ${profile.yearsExperience} years`, ...overlap.map(skill => `Declared skill: ${skill}`)];
   // The draft is composed only from candidate evidence; vacancy text cannot inject qualifications.
   const text = `${profile.displayName}\n${profile.currentRole} | ${profile.yearsExperience} years of experience\n\nRelevant declared skills\n${overlap.length ? overlap.map(skill => `- ${skill}`).join('\n') : '- No confirmed overlap yet'}\n\nCareer objective (user-declared)\n${profile.objective}\n\nReview note: This draft includes only saved candidate statements. Employment chronology and achievements must be added from verified source records.`;
-  return { vacancyId: vacancy.id, text, evidence, gaps, score, seniorityWarning, compensation, hash: digest(text + vacancy.id) };
+  return { vacancyId: vacancy.id, text, evidence, gaps, score, seniorityWarning, compensation, hash: digest(text + vacancy.id),rubricVersion:'fixture-v2: skills60/seniority20/direction20; title-only signals; not hiring probability',requirements:requirements.map(requirement=>{const skill=usable.find(s=>normalize(s.name)===requirement);return {text:requirement,source:vacancy.url,classification:'required' as const,evidence:skill?`${skill.name} (${skill.status==='verified'?'user-confirmed': 'user-declared'}; not independently verified)`:'No supported candidate statement',status:skill?'partial' as const:'gap' as const};}),uncertainty:'Fixed vocabulary extraction may miss unrecognized requirements. Review the full source. Salary is synthetic fixture data, not employer-published compensation.' };
 }

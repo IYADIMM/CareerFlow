@@ -7,9 +7,11 @@ import { invokeTool, terminal, zeroUsage } from '../packages/agent-core/index.ts
 import type { AgentRun, Principal } from '../packages/agent-core/index.ts';
 import { deduplicate, digest, discoverTool, prepareDraft, verifySource } from '../packages/agent-tools/careerflow.ts';
 import type { TargetCompany } from '../packages/agent-tools/careerflow.ts';
+import { reconcileWorkspace } from './workspace-rules.ts';
+import type { CareerDocument } from '../src/types.ts';
 
 export class ApiError extends Error { status: number; constructor(status: number, message: string) { super(message); this.status = status; } }
-export const targetSchema = z.object({ roles: z.array(z.string().trim().min(2).max(120)).min(1).max(10), companies: z.array(z.object({ id: z.enum(['meridian','horizon']), name: z.enum(['Demo Meridian','Demo Horizon']), source: z.literal('fixture'), enabled: z.boolean() })).min(1).max(2), salary: z.object({ annual: z.number().positive().max(1e8), currency: z.enum(['AED','USD','EUR','GBP']) }).optional(), consent: z.literal(true) });
+export const targetSchema = z.strictObject({ mode:z.enum(['companies','roles','intersection']).default('intersection'), roles: z.array(z.string().trim().min(2).max(120)).min(1).max(10), companies: z.array(z.strictObject({ id: z.enum(['meridian','horizon']), name: z.enum(['Demo Meridian','Demo Horizon']), source: z.literal('fixture'), enabled: z.boolean() })).min(1).max(2), salary: z.strictObject({ annual: z.number().positive().max(1e8), currency: z.enum(['AED','USD','EUR','GBP']) }).optional(), consent: z.literal(true) });
 export type Targets = z.infer<typeof targetSchema>;
 interface Session { principal: Principal; csrf: string; email: string }
 
@@ -34,6 +36,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS idempotency(tenant_id TEXT,key TEXT,request_hash TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(tenant_id,key));`);
   }
   close() { if (this.db.isOpen) this.db.close(); }
+  assertAccess(principal: Principal, write=false) {
+    const membership=this.db.prepare('SELECT m.role,o.owner_id FROM memberships m JOIN organizations o ON o.id=m.tenant_id WHERE m.tenant_id=? AND m.user_id=?').get(principal.tenantId,principal.userId) as {role:string;owner_id:string}|undefined;
+    // This adapter supports personal workspaces only. Membership is not consent to candidate data.
+    if (!membership || membership.owner_id!==principal.userId || (write && (membership.role==='viewer' || principal.role==='viewer'))) throw new ApiError(403,'Access denied.');
+  }
   transaction<T>(fn: () => T): T { this.db.exec('BEGIN IMMEDIATE'); try { const value = fn(); this.db.exec('COMMIT'); return value; } catch (error) { this.db.exec('ROLLBACK'); throw error; } }
   audit(principal: Principal, action: string, runId: string | null = null, details: unknown = {}) {
     this.db.prepare('INSERT INTO audit_events(tenant_id,actor_id,run_id,action,at,details) VALUES(?,?,?,?,?,?)').run(principal.tenantId, principal.userId, runId, action, new Date().toISOString(), JSON.stringify(details));
@@ -59,6 +66,7 @@ export class Store {
     const computed = scryptSync(credentials.password,row?.salt || 'missing-user-fixed-salt',64);
     if (!row || !timingSafeEqual(computed,Buffer.from(row.password_hash,'hex'))) throw new ApiError(401,'Email or password is incorrect.');
     const membership = this.db.prepare('SELECT tenant_id,role FROM memberships WHERE user_id=? ORDER BY tenant_id LIMIT 1').get(row.id) as { tenant_id: string; role: Principal['role'] };
+    if (!membership) throw new ApiError(403,'Account access has been revoked.');
     return this.issueSession({ userId: row.id, tenantId: membership.tenant_id, role: membership.role },email);
   }
   issueSession(principal: Principal, email: string) {
@@ -73,26 +81,29 @@ export class Store {
   }
   logout(token: string) { this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(digest(token)); }
   workspace(principal: Principal) {
+    this.assertAccess(principal);
     const row = this.db.prepare('SELECT payload,revision FROM workspaces WHERE tenant_id=?').get(principal.tenantId) as { payload: string; revision: number };
     return { state: workspaceSchema.parse(JSON.parse(row.payload)), revision: row.revision };
   }
   saveWorkspace(principal: Principal, input: unknown) {
-    if (principal.role === 'viewer') throw new ApiError(403,'Access denied.');
-    const parsed = z.object({ state: workspaceSchema, revision: z.number().int().min(0) }).parse(input);
+    this.assertAccess(principal,true);
+    const parsed = z.strictObject({ state: workspaceSchema, revision: z.number().int().min(0) }).parse(input);
     return this.transaction(() => {
       const previous = this.workspace(principal);
       if (previous.revision !== parsed.revision) throw new ApiError(409,'Workspace changed. Reload before saving.');
-      if (parsed.state.profile) parsed.state.profile.id = previous.state.profile?.id || randomUUID();
+      try { parsed.state=workspaceSchema.parse(reconcileWorkspace(previous.state,parsed.state)); } catch(error) { throw new ApiError(400,error instanceof Error?error.message:'Invalid workspace change.'); }
+      workspaceSchema.parse(parsed.state);
       this.db.prepare('UPDATE workspaces SET payload=?,revision=revision+1 WHERE tenant_id=?').run(JSON.stringify(parsed.state),principal.tenantId);
       this.audit(principal,'workspace.saved'); return this.workspace(principal);
     });
   }
   targets(principal: Principal): Targets | null {
+    this.assertAccess(principal);
     const row = this.db.prepare('SELECT payload FROM target_radar WHERE tenant_id=?').get(principal.tenantId) as { payload: string } | undefined;
     return row ? targetSchema.parse(JSON.parse(row.payload)) : null;
   }
   saveTargets(principal: Principal, input: unknown) {
-    if (principal.role === 'viewer') throw new ApiError(403,'Access denied.');
+    this.assertAccess(principal,true);
     const targets = targetSchema.parse(input);
     if (!targets.companies.some(company => company.enabled)) throw new ApiError(400,'Choose at least one company.');
     const expected = { meridian: 'Demo Meridian', horizon: 'Demo Horizon' };
@@ -104,14 +115,17 @@ export class Store {
     return targets;
   }
   runs(principal: Principal): AgentRun[] {
+    this.assertAccess(principal);
     return (this.db.prepare('SELECT payload FROM agent_runs WHERE tenant_id=? AND user_id=? ORDER BY created_at DESC').all(principal.tenantId,principal.userId) as { payload: string }[]).map(row => JSON.parse(row.payload));
   }
   run(principal: Principal, id: string): AgentRun {
+    this.assertAccess(principal);
     const row = this.db.prepare('SELECT payload FROM agent_runs WHERE id=? AND tenant_id=? AND user_id=?').get(id,principal.tenantId,principal.userId) as { payload: string } | undefined;
     if (!row) throw new ApiError(404,'Run not found.');
     const run = JSON.parse(row.payload) as AgentRun; authorize(principal,run); return run;
   }
   cached(principal: Principal, key: string, input: unknown): AgentRun | undefined {
+    this.assertAccess(principal,true);
     if (!/^[a-zA-Z0-9_-]{8,120}$/.test(key)) throw new ApiError(400,'Valid idempotency key required.');
     const row = this.db.prepare('SELECT request_hash,result FROM idempotency WHERE tenant_id=? AND key=?').get(principal.tenantId,principal.userId+':'+key) as { request_hash: string; result: string } | undefined;
     if (row && row.request_hash !== digest(JSON.stringify(input))) throw new ApiError(409,'Idempotency key already used for another command.');
@@ -121,7 +135,7 @@ export class Store {
     this.db.prepare('INSERT INTO idempotency VALUES(?,?,?,?)').run(principal.tenantId,principal.userId+':'+key,digest(JSON.stringify(input)),JSON.stringify(run));
   }
   createRun(principal: Principal, input: unknown, key: string): AgentRun {
-    if (principal.role === 'viewer') throw new ApiError(403,'Access denied.');
+    this.assertAccess(principal,true);
     const command = z.object({ goal: z.string().trim().min(5).max(500) }).parse(input);
     const request = { kind: 'create', ...command }; const cached = this.cached(principal,key,request); if (cached) return cached;
     if (!this.workspace(principal).state.profile || !this.targets(principal)?.consent) throw new ApiError(400,'Save a profile and consented targets first.');
@@ -130,12 +144,15 @@ export class Store {
       if (count.n >= 20) throw new ApiError(429,'Daily local run limit reached.');
       const run: AgentRun = { id: randomUUID(), userId: principal.userId, tenantId: principal.tenantId, goal: command.goal, state: 'created', plan: [], checkpoints: [], drafts: [], rejectedSources: [], duplicates: 0, revision: 0, expiresAt: new Date(Date.now()+86400000).toISOString(), budgetCents: 0, usage: zeroUsage(), approvedHashes: [], receipts: [], followUps: [] };
       run.checkpoints.push({ state:'created',step:'goal',at:new Date().toISOString(),usage:zeroUsage() });
+      run.inputSnapshot={profile:this.workspace(principal).state.profile!,targets:this.targets(principal)!,workspaceRevision:this.workspace(principal).revision};
+      run.inputHash=digest(JSON.stringify(run.inputSnapshot)); run.toolCalls=[];
       this.db.prepare('INSERT INTO agent_runs VALUES(?,?,?,?,?,?)').run(run.id,run.tenantId,run.userId,JSON.stringify(run),0,new Date().toISOString());
       this.db.prepare('INSERT INTO agent_checkpoints VALUES(?,?,?,?)').run(run.id,0,'created',new Date().toISOString());
       this.audit(principal,'agent.created',run.id); this.cache(principal,key,request,run); return run;
     });
   }
   async command(principal: Principal, id: string, input: unknown, key: string): Promise<AgentRun> {
+    this.assertAccess(principal,true);
     const command = z.object({ action: z.enum(['advance','approve','pause','resume','cancel']), revision: z.number().int().nonnegative(), draftHashes: z.array(z.string()).optional() }).parse(input);
     const request = { id, ...command }; const cached = this.cached(principal,key,request); if (cached) return cached;
     const run = this.run(principal,id);
@@ -148,20 +165,28 @@ export class Store {
     else if (command.action === 'resume' && run.state === 'paused') { run.state = run.pausedFrom || 'ready'; delete run.pausedFrom; }
     else if (command.action === 'approve' && run.state === 'awaiting_approval') {
       if (run.drafts.length === 0 || JSON.stringify(command.draftHashes?.slice().sort()) !== JSON.stringify(run.drafts.map(draft => draft.hash).sort())) throw new ApiError(400,'Approve the exact current draft versions.');
-      run.approvalAt = new Date().toISOString(); run.approvedHashes = command.draftHashes!; run.state = 'executing';
+      run.approvalAt = new Date().toISOString(); run.approvalExpiresAt=new Date(Date.now()+30*60000).toISOString(); run.approvedHashes = command.draftHashes!; run.state = 'executing';
     } else if (command.action === 'advance') {
       if (run.state === 'created') { run.state = 'planning'; }
       else if (run.state === 'planning') { run.plan = ['Read consented profile and targets','Discover mock vacancies','Verify provenance and freshness','Detect duplicates and reposts','Extract requirements and explain fit','Prepare evidence-only drafts','Request approval of exact draft versions','Record preparation and verify receipts','Schedule in-app review follow-ups']; run.state = 'ready'; }
       else if (run.state === 'ready') {
-        const workspace = this.workspace(principal).state, targets = this.targets(principal);
+        const workspace = {profile:run.inputSnapshot?.profile}, targets = run.inputSnapshot?.targets;
         if (!workspace.profile || !targets?.consent) throw new ApiError(400,'Profile consent is required.');
-        const records = await invokeTool(discoverTool,{ companies: targets.companies as TargetCompany[], now: new Date() },{ principal, runId: run.id, budgetCents: run.budgetCents, idempotencyKey: key });
+        const startedAt=new Date().toISOString();
+        const records = await invokeTool(discoverTool,{ companies: targets.companies.map(company=>({...company,enabled:targets.mode==='roles' || company.enabled})) as TargetCompany[], now: new Date() },{ principal, runId: run.id, budgetCents: run.budgetCents, idempotencyKey: key });
+        run.toolCalls=[...(run.toolCalls || []),{name:discoverTool.name,startedAt,endedAt:new Date().toISOString(),resultCount:records.length,attempts:1,outcome:'success'}];
+        run.sources=records;
         const accepted = records.filter(record => { const reason = verifySource(record,new Date()); if (reason) run.rejectedSources.push({ id: record.id,reason }); return !reason; });
-        const deduped = deduplicate(accepted); run.duplicates = deduped.duplicates;
-        run.drafts = deduped.vacancies.filter(vacancy => targets.roles.some(role => vacancy.title.toLowerCase().includes(role.toLowerCase()) || role.toLowerCase().includes(vacancy.title.toLowerCase()))).map(vacancy => prepareDraft(workspace.profile!,vacancy,targets.salary));
+        const deduped = deduplicate(accepted); run.duplicates = deduped.duplicates;run.sourceDecisions=deduped.decisions;
+        run.drafts = deduped.vacancies.filter(vacancy => targets.mode==='companies' || targets.roles.some(role => vacancy.title.toLowerCase().includes(role.toLowerCase()) || role.toLowerCase().includes(vacancy.title.toLowerCase()))).map(vacancy => prepareDraft(workspace.profile!,vacancy,targets.salary));
         run.state = run.drafts.length ? 'awaiting_approval' : 'failed';
         if (!run.drafts.length) run.error = 'No fresh permitted fixtures matched the selected roles. Adjust targets and create another run.';
-      } else if (run.state === 'executing' && run.approvalAt) { authorizeAction('record_preparation',principal,run); run.state = 'verifying'; }
+      } else if (run.state === 'executing' && run.approvalAt) {
+        const currentProfile=this.workspace(principal).state.profile;
+        const currentTargets=this.targets(principal);
+        if (JSON.stringify(currentProfile)!==JSON.stringify(run.inputSnapshot?.profile) || JSON.stringify(currentTargets)!==JSON.stringify(run.inputSnapshot?.targets)) throw new ApiError(409,'Profile or targets changed. Cancel and create a fresh run before approval.');
+        authorizeAction('record_preparation',principal,run); run.state = 'verifying';
+      }
       else if (run.state === 'verifying') { run.state = 'completed'; }
       else throw new ApiError(409,'This checkpoint requires a different action.');
     } else throw new ApiError(409,'Action is invalid for this checkpoint.');
@@ -169,6 +194,7 @@ export class Store {
     run.checkpoints.push({ state: run.state, step: command.action, at: new Date().toISOString(), usage: zeroUsage() });
     return this.transaction(() => {
       const latest = this.run(principal,id); if (latest.revision !== command.revision) throw new ApiError(409,'Concurrent update. Reload the run.');
+      this.assertAccess(principal,true);
       if (prior === 'executing' && run.state === 'verifying') {
         run.receipts = run.drafts.map(draft => {
           const receipt = { id: randomUUID(), vacancyId: draft.vacancyId, kind: 'preparation_record' as const, verified: false };
@@ -191,5 +217,31 @@ export class Store {
       this.cache(principal,key,request,run); return run;
     });
   }
-  auditLog(principal: Principal) { return this.db.prepare('SELECT id,run_id,action,at,details FROM audit_events WHERE tenant_id=? ORDER BY id DESC LIMIT 100').all(principal.tenantId); }
+  document(principal:Principal,id:string) {
+    const document=this.workspace(principal).state.documents.find(item=>item.id===id);
+    if (!document) throw new ApiError(404,'Document not found.');
+    if (!document.approvedVersion || document.approvedVersion!==document.version) throw new ApiError(409,'Review and approve this document version before export.');
+    this.audit(principal,'document.exported',null,{id,version:document.version}); return document;
+  }
+  tailor(principal:Principal,input:unknown) {
+    this.assertAccess(principal,true);
+    const {masterId,factIds,revision}=z.strictObject({masterId:z.string(),factIds:z.array(z.string()).max(200),revision:z.number().int().nonnegative()}).parse(input);
+    const current=this.workspace(principal), master=current.state.documents.find(d=>d.id===masterId);
+    if (!master || master.approvedVersion!==master.version || !master.approvedVersion) throw new ApiError(400,'Approve the master source version first.');
+    const facts=(current.state.facts || []).filter(f=>factIds.includes(f.id));
+    if (facts.length!==new Set(factIds).size || facts.some(f=>f.status!=='user_confirmed')) throw new ApiError(400,'Select only user-confirmed source facts.');
+    const document:CareerDocument={id:randomUUID(),name:master.name+' — tailored draft',sourceType:'pasted_text',sourceText:master.sourceText+(facts.length?'\n\nSelected career evidence (user-confirmed, not independently verified)\n'+facts.map(f=>f.text).join('\n'):''),detectedSections:master.detectedSections,verificationStatus:'needs_review',createdAt:new Date().toISOString(),kind:'tailored',parentDocumentId:master.id,factIds:factIds,version:1,history:[]};
+    return this.saveWorkspace(principal,{state:{...current.state,documents:[document,...current.state.documents]},revision});
+  }
+  trackDraft(principal:Principal,runId:string,vacancyId:string) {
+    this.assertAccess(principal,true); const run=this.run(principal,runId);
+    if (run.state!=='completed') throw new ApiError(409,'Verify the approved preparation first.');
+    const source=run.sources?.find(v=>v.id===vacancyId), draft=run.drafts.find(d=>d.vacancyId===vacancyId);
+    if (!source || !draft) throw new ApiError(404,'Prepared vacancy not found.');
+    const current=this.workspace(principal), id='fixture-'+runId+'-'+vacancyId;
+    if (current.state.applications.some(a=>a.vacancyId===id)) return current;
+    const vacancy={id,title:source.title,company:source.company,description:source.description,location:'Fixture — location unspecified',workMode:'flexible' as const,requiredSkills:[],importedAt:new Date().toISOString(),availability:'unknown' as const,sourceKind:'fixture' as const};
+    return this.saveWorkspace(principal,{revision:current.revision,state:{...current.state,vacancies:[vacancy,...current.state.vacancies],applications:[{id:randomUUID(),vacancyId:id,status:'saved',nextAction:'Review prepared draft; this synthetic opportunity has not been submitted.',updatedAt:new Date().toISOString()},...current.state.applications]}});
+  }
+  auditLog(principal: Principal) { this.assertAccess(principal); return this.db.prepare('SELECT id,run_id,action,at,details FROM audit_events WHERE tenant_id=? AND actor_id=? ORDER BY id DESC LIMIT 100').all(principal.tenantId,principal.userId); }
 }

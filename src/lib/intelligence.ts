@@ -1,4 +1,5 @@
 import type { CareerDocument, CareerProfile, InterviewPlan, MatchDimension, MatchReport, Vacancy } from '../types';
+import { safeReferenceUrl } from './safety.ts';
 
 const sectionMatchers: Array<[string, RegExp]> = [
   ['Professional summary', /\b(summary|profile|objective)\b/i],
@@ -14,12 +15,13 @@ export function createTextDocument(name: string, sourceText: string): CareerDocu
   if (text.length < 120) throw new Error('Add at least 120 characters so the document can be reviewed meaningfully.');
   if (text.length > 80_000) throw new Error('Text import is limited to 80,000 characters.');
   const detectedSections = sectionMatchers.filter(([, matcher]) => matcher.test(text)).map(([label]) => label);
-  return { id: crypto.randomUUID(), name: name.trim() || 'Master CV', sourceType: 'pasted_text', sourceText: text, detectedSections, verificationStatus: 'needs_review', createdAt: new Date().toISOString() };
+  return { id: crypto.randomUUID(), name: name.trim() || 'Master CV', sourceType: 'pasted_text', sourceText: text, detectedSections, verificationStatus: 'needs_review', version:1,kind:'master',history:[],createdAt: new Date().toISOString() };
 }
 
 export function createVacancy(input: Omit<Vacancy, 'id' | 'importedAt' | 'requiredSkills'> & { requiredSkills: string[] }): Vacancy {
   if (input.description.trim().length < 100) throw new Error('Add at least 100 characters of vacancy text for a meaningful comparison.');
-  return { ...input, title: input.title.trim(), company: input.company.trim(), description: input.description.trim(), requiredSkills: unique(input.requiredSkills.map(normalizeDisplay).filter(Boolean)), id: crypto.randomUUID(), importedAt: new Date().toISOString() };
+  if (input.sourceUrl && !safeReferenceUrl(input.sourceUrl)) throw new Error('Use a public HTTPS source URL. Internal addresses and other protocols are not supported.');
+  return { ...input, title: input.title.trim(), company: input.company.trim(), description: input.description.trim(), requiredSkills: unique(input.requiredSkills.map(normalizeDisplay).filter(Boolean)), id: crypto.randomUUID(), importedAt: new Date().toISOString(), availability:'unknown',sourceKind:'user_content' };
 }
 
 const seniorityTerms: Array<[number, RegExp]> = [
@@ -38,11 +40,11 @@ const normalizeDisplay = (value: string) => value.trim().replace(/\s+/g, ' ');
 const unique = (values: string[]) => [...new Set(values)];
 
 export function calculateMatch(profile: CareerProfile, vacancy: Vacancy): MatchReport {
-  const profileSkills = profile.skills.map((skill) => normalized(skill.name));
+  const profileSkills = profile.skills.filter(skill=>skill.status!=='inferred').map((skill) => normalized(skill.name));
   const required = vacancy.requiredSkills.map(normalized);
-  const matched = vacancy.requiredSkills.filter((_, index) => profileSkills.some((skill) => skill === required[index] || skill.includes(required[index]) || required[index].includes(skill)));
+  const matched = vacancy.requiredSkills.filter((_, index) => profileSkills.includes(required[index]));
   const missing = vacancy.requiredSkills.filter((skill) => !matched.includes(skill));
-  const skillsScore = required.length ? Math.round((matched.length / required.length) * 100) : 50;
+  const skillsScore = required.length ? Math.round((matched.length / required.length) * 100) : null;
   const currentRank = Math.max(seniorityRank(profile.currentRole), seniorityRank(profile.targetRole));
   const vacancyRank = seniorityRank(vacancy.title);
   const rankDelta = vacancyRank - currentRank;
@@ -60,10 +62,10 @@ export function calculateMatch(profile: CareerProfile, vacancy: Vacancy): MatchR
     { key: 'careerDirection', label: 'Career direction', score: careerMatch ? 90 : 55, explanation: careerMatch ? 'The vacancy title overlaps with the saved target direction.' : 'The title does not clearly align with the saved target role.', evidence: [`Target: ${profile.targetRole}`, `Vacancy: ${vacancy.title}`] },
   ];
   const weights: Record<MatchDimension['key'], number> = { skills: .35, seniority: .25, location: .1, workMode: .1, careerDirection: .2 };
-  const overallScore = Math.round(dimensions.reduce((sum, item) => sum + item.score * weights[item.key], 0));
+  const overallScore = skillsScore===null ? null : Math.round(dimensions.reduce((sum, item) => sum + (item.score || 0) * weights[item.key], 0));
   return {
-    id: crypto.randomUUID(), vacancyId: vacancy.id, overallScore, dimensions,
-    strengths: [matched.length ? `Confirmed overlap: ${matched.join(', ')}` : '', locationMatch ? 'Location preference is compatible.' : '', workModeMatch ? 'Working model is compatible.' : ''].filter(Boolean),
+    id: crypto.randomUUID(), vacancyId: vacancy.id, overallScore, dimensions,rubricVersion:'manual-v2: skills35/seniority25/location10/workMode10/direction20; unknown requirements=no overall score',
+    strengths: [matched.length ? `User-stated overlap (not independently verified): ${matched.join(', ')}` : '', locationMatch ? 'Location preference is compatible.' : '', workModeMatch ? 'Working model is compatible.' : ''].filter(Boolean),
     gaps: [missing.length ? `Unverified requirements: ${missing.join(', ')}` : '', !careerMatch ? 'Role title needs a closer career-direction review.' : ''].filter(Boolean),
     seniorityWarning: rankDelta < 0 ? `Seniority review recommended: “${vacancy.title}” may represent a lower level than “${profile.currentRole}” or your target direction.` : null,
     createdAt: new Date().toISOString(),

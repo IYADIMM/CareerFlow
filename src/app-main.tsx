@@ -1,11 +1,14 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { HashRouter, Link, Navigate, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
+import { HashRouter, Link, Navigate, NavLink, Outlet, Route, Routes, useNavigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ApplicationStatus, CareerProfile, MatchReport, Vacancy, WorkspaceState } from './types';
-import { emptyWorkspace, loadWorkspace, makeProfile, profileCompleteness, saveWorkspace } from './lib/workspace';
+import type { CareerProfile, MatchReport, Vacancy, WorkspaceState } from './types';
+import { emptyWorkspace, makeProfile, profileCompleteness } from './lib/workspace';
 import { buildInterviewPlan, calculateMatch, createTextDocument, createVacancy } from './lib/intelligence';
 import { AgentPage } from './AgentPage';
+import { ApplicationsPage } from './ApplicationsPage';
+import { EvidencePanel } from './EvidencePanel';
+import { DocumentReview } from './DocumentReview';
 import { api, setSession } from './lib/api';
 import type { DevSession } from './lib/api';
 import './app.css';
@@ -33,10 +36,10 @@ function Welcome({ profile }: { profile: CareerProfile | null }) {
         <a className="app-brand" href="./index.html" aria-label="CareerFlow AI home"><BrandMark /> careerflow<span>.ai</span></a>
         <p className="eyebrow">LOCAL PRODUCT FOUNDATION / 001</p>
         <h1>Your career story.<br /><em>Finally connected.</em></h1>
-        <p className="lede">Build a private career profile and see your next actions take shape. This milestone stores data in this browser only—no AI provider, cloud database, or payment account is connected.</p>
-        <div className="notice"><strong>Honest demo mode</strong><span>Use synthetic information while evaluating the product. Browser data can be cleared from Settings.</span></div>
+        <p className="lede">Build a private career profile and see your next actions take shape. Sign in to the local development workspace to save synthetic test data. Hosted customer storage, live job sources, AI providers and payments remain unavailable.</p>
+        <div className="notice"><strong>Honest demo mode</strong><span>Use synthetic information while evaluating the product. This local environment is for synthetic evaluation only.</span></div>
         <div className="welcome-actions">
-          <Link className="primary-action" to={profile ? '/dashboard' : '/profile'}>{profile ? 'RETURN TO COMMAND CENTER' : 'CREATE LOCAL PROFILE'} <span>↗</span></Link>
+          <Link className="primary-action" to={profile ? '/dashboard' : '/agent'}>{profile ? 'RETURN TO COMMAND CENTER' : 'SIGN IN TO LOCAL WORKSPACE'} <span>↗</span></Link>
           <a className="secondary-action" href="./index.html">BACK TO WEBSITE</a>
         </div>
       </section>
@@ -46,7 +49,12 @@ function Welcome({ profile }: { profile: CareerProfile | null }) {
 
 function AppOutletShell({ workspace, authenticated }: { workspace: WorkspaceState; authenticated: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const location=useLocation();
+  const mainRef=useRef<HTMLElement>(null),menuRef=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{setMenuOpen(false);mainRef.current?.focus();},[location.pathname]);
+  useEffect(()=>{if(!menuOpen)return;const close=(e:KeyboardEvent)=>{if(e.key==='Escape'){setMenuOpen(false);menuRef.current?.focus();}};document.addEventListener('keydown',close);return()=>document.removeEventListener('keydown',close);},[menuOpen]);
   return <div className="app-shell">
+    <a href="#main-content" className="skip-link" onClick={e=>{e.preventDefault();mainRef.current?.focus();}}>Skip to main content</a>
     <aside id="app-sidebar" className={menuOpen ? 'sidebar is-open' : 'sidebar'}>
       <a className="app-brand" href="./index.html"><BrandMark /> careerflow<span>.ai</span></a>
       <button className="menu-button close-menu" type="button" onClick={() => setMenuOpen(false)}>CLOSE NAVIGATION</button>
@@ -62,20 +70,20 @@ function AppOutletShell({ workspace, authenticated }: { workspace: WorkspaceStat
         <NavLink to="/journey" onClick={() => setMenuOpen(false)}>Journey map <span>10</span></NavLink>
         <NavLink to="/settings" onClick={() => setMenuOpen(false)}>Settings <span>••</span></NavLink>
       </nav>
-      <div className="side-status"><span className="status-dot" /> {authenticated ? 'LOCAL ACCOUNT' : 'BROWSER DEMO'}<p>{authenticated ? 'Saved in your tenant database.' : 'Data stays in this browser.'}</p></div>
+      <div className="side-status"><span className="status-dot" /> {authenticated ? 'LOCAL ACCOUNT' : 'SIGNED OUT'}<p>{authenticated ? 'Saved in your tenant database.' : 'Sign in to save synthetic test data.'}</p></div>
     </aside>
     <div className="app-main">
       <header className="app-header">
-        <button className="menu-button" type="button" aria-expanded={menuOpen} aria-controls="app-sidebar" onClick={() => setMenuOpen((value) => !value)}>MENU</button>
+        <button className="menu-button" type="button" aria-expanded={menuOpen} aria-controls="app-sidebar" ref={menuRef} onClick={() => setMenuOpen((value) => !value)}>MENU</button>
         <div><span className="context-label">PERSONAL WORKSPACE</span><strong>{workspace.profile?.displayName || 'Your workspace'}</strong></div>
         <Link to="/profile" className="header-profile" aria-label="Edit career profile">{initials(workspace.profile?.displayName || 'Career Flow')}</Link>
       </header>
-      <main className="route-content"><Outlet /></main>
+      <main id="main-content" tabIndex={-1} ref={mainRef} className="route-content"><Outlet /></main>
     </div>
   </div>;
 }
 
-function Dashboard({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
+function Dashboard({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => Promise<void> }) {
   const completion = profileCompleteness(workspace.profile);
   const activeActions = workspace.actions.filter((action) => !action.completed);
   return <>
@@ -110,9 +118,10 @@ function Dashboard({ workspace, update }: { workspace: WorkspaceState; update: (
   </>;
 }
 
-function ProfileEditor({ profile, update }: { profile: CareerProfile | null; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
+function ProfileEditor({ profile, update }: { profile: CareerProfile | null; update: (recipe: (state: WorkspaceState) => WorkspaceState) => Promise<void> }) {
   const navigate = useNavigate();
   const [saved, setSaved] = useState(false);
+  const [saving,setSaving]=useState(false);
   const [profileError, setProfileError] = useState('');
   const [form, setForm] = useState({
     displayName: profile?.displayName || '', email: profile?.email || '', currentRole: profile?.currentRole || '', yearsExperience: profile?.yearsExperience || 0,
@@ -122,11 +131,12 @@ function ProfileEditor({ profile, update }: { profile: CareerProfile | null; upd
   const set = (key: keyof typeof form, value: string | number) => setForm((current) => ({ ...current, [key]: value }));
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    setSaving(true); setProfileError('');
     const nextProfile = makeProfile({ ...form, email: form.email, yearsExperience: Number(form.yearsExperience), skills: form.skills.split(',').map((item) => item.trim()) }, profile);
     try { await update((state) => ({ ...state, profile: nextProfile, consentAcceptedAt: state.consentAcceptedAt || new Date().toISOString(), stageProgress: [35, ...state.stageProgress.slice(1)], actions: state.actions.map((item) => item.id === 'complete-profile' ? { ...item, completed: true } : item) })); }
-    catch { setProfileError('Your changes could not be saved. Review the workspace error and try again.'); return; }
+    catch { setProfileError('Your changes could not be saved. Review the workspace error and try again.'); setSaving(false); return; }
     setSaved(true);
-    window.setTimeout(() => navigate('/dashboard'), 650);
+    setSaving(false); navigate('/dashboard');
   };
   return <>
     <PageHead eyebrow="CAREER DIGITAL TWIN / FOUNDATION" title="Tell the truth of your experience." copy="Start with user-declared facts. AI-inferred competencies will always remain separately labeled and reviewable when that service is connected." />
@@ -144,20 +154,20 @@ function ProfileEditor({ profile, update }: { profile: CareerProfile | null; upd
         <Field label="Skills (comma separated)"><input required value={form.skills} onChange={(e) => set('skills', e.target.value)} placeholder="Commercial strategy, negotiation" /></Field>
         <Field label="Career objective" wide><textarea required rows={4} value={form.objective} onChange={(e) => set('objective', e.target.value)} placeholder="What should your next chapter make possible?" /></Field>
       </div></div>
-      {profileError && <p className="form-error" role="alert">{profileError}</p>}<div className="form-footer"><p><span className="status-dot" /> Uses the workspace storage mode shown in navigation.</p><button className="primary-action" type="submit">{saved ? 'SAVED' : 'SAVE CAREER FOUNDATION'} <span>{saved ? '✓' : '↗'}</span></button></div>
+      {profileError && <p className="form-error" role="alert">{profileError}</p>}<div className="form-footer"><p><span className="status-dot" /> Uses the workspace storage mode shown in navigation.</p><button className="primary-action" type="submit" disabled={saving}>{saving ? 'SAVING…' : saved ? 'SAVED' : 'SAVE CAREER FOUNDATION'} <span>{saved ? '✓' : '↗'}</span></button></div>
     </form>
   </>;
 }
 
-function CvStudio({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
+function CvStudio({ workspace, update, reload }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => Promise<void>; reload:()=>Promise<void> }) {
   const [name, setName] = useState('Master CV');
   const [text, setText] = useState('');
   const [error, setError] = useState('');
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
       const document = createTextDocument(name, text);
-      update((state) => ({
+      await update((state) => ({
         ...state,
         documents: [document, ...state.documents],
         stageProgress: state.stageProgress.map((value, index) => index === 2 ? Math.max(value, 35) : value),
@@ -173,7 +183,7 @@ function CvStudio({ workspace, update }: { workspace: WorkspaceState; update: (r
     actions: state.actions.map((action) => action.id === `verify-${id}` ? { ...action, completed: true } : action),
   }));
   return <>
-    <PageHead eyebrow="CV STUDIO / TRUTH FIRST" title="Build from evidence, not invention." copy="Paste CV text for a deterministic structure check. Nothing is described as AI, and no extracted item becomes verified until you approve the source." />
+    <PageHead eyebrow="CV STUDIO / TRUTH FIRST" title="Build from evidence, not invention." copy="Paste CV text for a deterministic structure check. Source review is your confirmation, not independent employment verification. Sharing with third parties is disabled." />
     <div className="workspace-grid">
       <form className="panel workflow-form" onSubmit={submit}>
         <div className="panel-head"><div><p className="eyebrow">TEXT IMPORT / WORKING LOCALLY</p><h2>Add a source CV</h2></div><span>PDF + DOCX NEXT</span></div>
@@ -181,12 +191,12 @@ function CvStudio({ workspace, update }: { workspace: WorkspaceState; update: (r
           <Field label="Document name" wide><input required value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <Field label="CV text" wide><textarea required rows={14} value={text} onChange={(event) => setText(event.target.value)} placeholder="Paste CV content here. Include headings such as Summary, Experience, Education and Skills." /></Field>
         </div>{error && <p className="form-error" role="alert">{error}</p>}</div>
-        <div className="form-footer"><p>Maximum 80,000 characters · stored in this browser</p><button className="primary-action" type="submit">IMPORT FOR REVIEW ↗</button></div>
+        <div className="form-footer"><p>Maximum 80,000 characters · saved in your authenticated workspace</p><button className="primary-action" type="submit">IMPORT FOR REVIEW ↗</button></div>
       </form>
       <section className="panel records-panel">
         <div className="panel-head"><div><p className="eyebrow">SOURCE DOCUMENTS</p><h2>{workspace.documents.length ? 'Verification queue' : 'No CV imported yet'}</h2></div><span>{workspace.documents.length} FILES</span></div>
         {workspace.documents.length ? workspace.documents.map((document) => <article className="record-card" key={document.id}>
-          <div className="record-title"><span className={`status-chip ${document.verificationStatus}`}>{document.verificationStatus.replace('_', ' ')}</span><h3>{document.name}</h3></div>
+          <div className="record-title"><span className={`status-chip ${document.verificationStatus}`}>{document.verificationStatus === 'verified' ? 'user-confirmed' : 'needs review'}</span><h3>{document.name}</h3></div>
           <p>{document.detectedSections.length ? `Detected headings: ${document.detectedSections.join(', ')}.` : 'No standard section headings detected. Review the source manually.'}</p>
           <details><summary>Read source text</summary><pre className="source-text">{document.sourceText}</pre></details>
           <span className="record-meta">{document.sourceText.length.toLocaleString()} CHARACTERS · PASTED TEXT</span>
@@ -194,20 +204,22 @@ function CvStudio({ workspace, update }: { workspace: WorkspaceState; update: (r
         </article>) : <Empty title="Bring your own evidence." copy="Paste CV text to create the first reviewable document record. PDF and DOCX parsing require the next secure file-processing slice." />}
       </section>
     </div>
+    <DocumentReview workspace={workspace} update={update} reload={reload} />
   </>;
 }
 
-function JobMatches({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
+function JobMatches({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => Promise<void> }) {
   const [form, setForm] = useState({ title: '', company: '', location: workspace.profile?.location || '', workMode: 'flexible' as CareerProfile['workMode'], requiredSkills: '', description: '', sourceUrl: '' });
   const [error, setError] = useState('');
   const set = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!workspace.profile) { setError('Create a career profile before generating a match report.'); return; }
     try {
       const vacancy = createVacancy({ ...form, requiredSkills: form.requiredSkills.split(',') });
       const report = calculateMatch(workspace.profile, vacancy);
-      update((state) => ({
+      if (workspace.vacancies.some(v=>v.title.toLowerCase()===vacancy.title.toLowerCase() && v.company.toLowerCase()===vacancy.company.toLowerCase() && v.description===vacancy.description)) throw new Error('This vacancy is already saved. Review its existing report.');
+      await update((state) => ({
         ...state, vacancies: [vacancy, ...state.vacancies], matchReports: [report, ...state.matchReports],
         stageProgress: state.stageProgress.map((value, index) => index === 3 ? Math.max(value, 55) : value),
         actions: uniqueActions([...state.actions, { id: `review-match-${report.id}`, title: `Review ${vacancy.title} evidence`, explanation: 'Check the strengths, gaps and seniority signal before deciding whether to apply.', priority: report.seniorityWarning ? 'high' : 'medium', href: '/jobs', completed: false }]),
@@ -245,11 +257,11 @@ function JobMatches({ workspace, update }: { workspace: WorkspaceState; update: 
         if (!vacancy) return null;
         const tracked = workspace.applications.some((item) => item.vacancyId === vacancy.id);
         return <article className="panel match-report" key={report.id}>
-          <div className="match-summary"><div><p className="eyebrow">ILLUSTRATIVE MATCH ESTIMATE</p><h2>{vacancy.title}</h2><p>{vacancy.company} · {vacancy.location} · {vacancy.workMode}</p></div><strong>{report.overallScore}<span>%</span></strong></div>
+          <div className="match-summary"><div><p className="eyebrow">ILLUSTRATIVE MATCH ESTIMATE</p><h2>{vacancy.title}</h2><p>{vacancy.company} · {vacancy.location} · {vacancy.workMode}</p></div><strong>{report.overallScore ?? 'Unknown'}{report.overallScore!==null && <span>%</span>}</strong></div>
           {report.seniorityWarning && <div className="warning-box"><span>!</span><div><strong>Seniority protection signal</strong><p>{report.seniorityWarning}</p></div></div>}
-          <div className="dimension-grid">{report.dimensions.map((dimension) => <div key={dimension.key}><span>{dimension.label}</span><strong>{dimension.score}%</strong><div><i style={{ width: `${dimension.score}%` }} /></div><p>{dimension.explanation}</p></div>)}</div>
+          <div className="dimension-grid">{report.dimensions.map((dimension) => <div key={dimension.key}><span>{dimension.label}</span><strong>{dimension.score===null?'Unknown':`${dimension.score}%`}</strong><div><i style={{ width: `${dimension.score || 0}%` }} /></div><p>{dimension.explanation}</p></div>)}</div>
           <div className="evidence-grid"><div><p className="eyebrow">STRENGTHS</p>{report.strengths.length ? report.strengths.map((item) => <p key={item}>+ {item}</p>) : <p>No confirmed strengths yet.</p>}</div><div><p className="eyebrow">GAPS / UNCERTAINTY</p>{report.gaps.length ? report.gaps.map((item) => <p key={item}>— {item}</p>) : <p>No stated gaps from this limited comparison.</p>}</div></div>
-          <div className="report-footer"><span>This baseline uses titles, declared skills and preferences only.</span><button className="primary-action" type="button" disabled={tracked} onClick={() => saveApplication(vacancy, report)}>{tracked ? 'SAVED TO PIPELINE ✓' : 'SAVE TO APPLICATIONS ↗'}</button></div>
+          <p className="mode-note">Availability: {vacancy.availability || 'unknown'} · User-supplied content; URL has not been retrieved. Imported {new Date(vacancy.importedAt).toLocaleString()}.</p><p className="mode-note">{report.rubricVersion}</p><div className="report-footer"><span>This baseline uses titles, declared skills and preferences only.</span><button className="primary-action" type="button" disabled={tracked} onClick={() => saveApplication(vacancy, report)}>{tracked ? 'SAVED TO PIPELINE ✓' : 'SAVE TO APPLICATIONS ↗'}</button></div>
         </article>;
       })}
       {!workspace.matchReports.length && <section className="panel"><Empty title="No match reports yet." copy="Import a real vacancy description above. CareerFlow will show exactly which saved facts influenced each dimension." /></section>}
@@ -257,33 +269,7 @@ function JobMatches({ workspace, update }: { workspace: WorkspaceState; update: 
   </>;
 }
 
-const applicationStatuses: Array<{ value: ApplicationStatus; label: string }> = [
-  { value: 'saved', label: 'Saved' }, { value: 'preparing', label: 'Preparing' }, { value: 'ready', label: 'Ready to apply' }, { value: 'applied', label: 'Applied' }, { value: 'screening', label: 'Recruiter screening' }, { value: 'interviewing', label: 'Interviewing' }, { value: 'offer', label: 'Offer' }, { value: 'accepted', label: 'Accepted' }, { value: 'rejected', label: 'Rejected' }, { value: 'withdrawn', label: 'Withdrawn' }, { value: 'archived', label: 'Archived' },
-];
-
-function Applications({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
-  const changeStatus = (id: string, status: ApplicationStatus) => update((state) => ({
-    ...state,
-    applications: state.applications.map((item) => item.id === id ? { ...item, status, nextAction: nextActionFor(status), updatedAt: new Date().toISOString() } : item),
-    stageProgress: state.stageProgress.map((value, index) => index === 5 ? Math.max(value, status === 'saved' ? 25 : status === 'preparing' ? 45 : 65) : value),
-  }));
-  return <>
-    <PageHead eyebrow="APPLICATIONS / HUMAN APPROVAL REQUIRED" title="Keep every opportunity moving." copy="Track status and next actions without automated submissions. Nothing is sent to an employer or recruiter from this local workspace." />
-    <section className="panel application-table-wrap">
-      <div className="panel-head"><div><p className="eyebrow">ACTIVE PIPELINE</p><h2>{workspace.applications.length ? `${workspace.applications.length} tracked opportunities` : 'Your pipeline is ready'}</h2></div><Link to="/jobs">ADD FROM MATCHES ↗</Link></div>
-      {workspace.applications.length ? <div className="application-table" role="table" aria-label="Application pipeline">
-        <div className="application-row header" role="row"><span>Opportunity</span><span>Status</span><span>Next action</span><span>Updated</span></div>
-        {workspace.applications.map((application) => { const vacancy = workspace.vacancies.find((item) => item.id === application.vacancyId); return <div className="application-row" role="row" key={application.id}>
-          <div><strong>{vacancy?.title || 'Removed vacancy'}</strong><span>{vacancy?.company || 'Unknown employer'}</span></div>
-          <select aria-label={`Status for ${vacancy?.title || 'application'}`} value={application.status} onChange={(event) => changeStatus(application.id, event.target.value as ApplicationStatus)}>{applicationStatuses.map((status) => <option value={status.value} key={status.value}>{status.label}</option>)}</select>
-          <p>{application.nextAction}</p><time>{new Date(application.updatedAt).toLocaleDateString()}</time>
-        </div>; })}
-      </div> : <Empty title="No applications recorded." copy="Save an opportunity from Job Matches when you decide it deserves a place in your pipeline." />}
-    </section>
-  </>;
-}
-
-function InterviewPrep({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => void }) {
+function InterviewPrep({ workspace, update }: { workspace: WorkspaceState; update: (recipe: (state: WorkspaceState) => WorkspaceState) => Promise<void> }) {
   const [vacancyId, setVacancyId] = useState(workspace.applications[0]?.vacancyId || '');
   const createPlan = () => {
     const vacancy = workspace.vacancies.find((item) => item.id === vacancyId);
@@ -300,10 +286,10 @@ function InterviewPrep({ workspace, update }: { workspace: WorkspaceState; updat
 
 function Journey({ workspace }: { workspace: WorkspaceState }) {
   return <>
-    <PageHead eyebrow="CAREER JOURNEY / 01—10" title="Move across your career, not through a funnel." copy="Stages can progress together. This first milestone activates the shared profile foundation; later vertical slices will connect jobs, documents, applications, interviews and offers to the same evidence model." />
+    <PageHead eyebrow="CAREER JOURNEY / 01—10" title="Move across your career, not through a funnel." copy="Stages can progress together. Profile, documents, manual matching, applications and interview preparation are connected locally. Skills plans, networking, assessments, offers and growth remain roadmap modules. Activity indicators are not career-success scores." />
     <section className="metro panel" aria-label="Ten-stage career journey">
       {stages.map(([number, name, description], index) => <article key={number} className={workspace.stageProgress[index] > 0 ? 'active' : ''}>
-        <div className="station"><span>{number}</span><i /></div><div><p className="eyebrow">STAGE {number} / {workspace.stageProgress[index]}%</p><h2>{name}</h2><p>{description}</p>{stageRoute(index) && <Link to={stageRoute(index)!}>OPEN WORKFLOW ↗</Link>}</div>
+        <div className="station"><span>{number}</span><i /></div><div><p className="eyebrow">STAGE {number} / {workspace.stageProgress[index]>0?'ACTIVITY RECORDED':'NOT STARTED'}</p><h2>{name}</h2><p>{description}</p>{stageRoute(index) && <Link to={stageRoute(index)!}>OPEN WORKFLOW ↗</Link>}</div>
       </article>)}
     </section>
   </>;
@@ -313,7 +299,7 @@ function Settings({ reset, authenticated }: { reset: () => Promise<void>; authen
   const [confirming, setConfirming] = useState(false);
   return <>
     <PageHead eyebrow="WORKSPACE / SETTINGS" title="You stay in control." copy="Review how this local milestone handles your information and remove it whenever you choose." />
-    <section className="panel settings-panel"><div><p className="eyebrow">DATA MODE</p><h2>{authenticated ? 'Authenticated development database' : 'Browser-local storage'}</h2><p>{authenticated ? 'Your personal workspace is saved in a tenant-isolated SQLite database on this computer.' : 'This demonstration saves its workspace in browser localStorage.'} AI, live vacancy sources and billing are not connected.</p></div><div className="danger-zone"><h3>Clear current workspace records</h3><p>This removes the current profile, CV text, manual jobs, applications and interview notes. {authenticated ? 'Agent drafts, approvals and audit history remain in the development database; this is not account deletion.' : 'This affects only this browser demo.'}</p>{confirming ? <div className="confirm-row"><button type="button" className="danger-button" onClick={() => { void reset().then(() => { location.hash = '#/dashboard'; }).catch(() => {}); }}>YES, CLEAR WORKSPACE</button><button type="button" onClick={() => setConfirming(false)}>CANCEL</button></div> : <button type="button" className="danger-button" onClick={() => setConfirming(true)}>CLEAR WORKSPACE RECORDS</button>}</div></section>
+    <p><a href="./policy.html">Privacy, terms and release limitations</a></p><section className="panel settings-panel"><div><p className="eyebrow">DATA MODE</p><h2>{authenticated ? 'Authenticated development database' : 'Signed out'}</h2><p>{authenticated ? 'Your personal workspace is saved in a tenant-isolated SQLite database on this computer.' : 'Sign in to save synthetic test data. Candidate records are not written to browser storage.'} AI, live vacancy sources and billing are not connected.</p></div><div className="danger-zone"><h3>Clear current workspace records</h3><p>This removes the current profile, CV text, manual jobs, applications and interview notes. {authenticated ? 'Agent drafts, approvals and audit history remain in the development database; this is not account deletion.' : 'This affects only this browser demo.'}</p>{confirming ? <div className="confirm-row"><button type="button" className="danger-button" onClick={() => { void reset().then(() => { location.hash = '#/dashboard'; }).catch(() => {}); }}>YES, CLEAR WORKSPACE</button><button type="button" onClick={() => setConfirming(false)}>CANCEL</button></div> : <button type="button" className="danger-button" onClick={() => setConfirming(true)}>CLEAR WORKSPACE RECORDS</button>}</div></section>
   </>;
 }
 
@@ -324,43 +310,47 @@ function Field({ label, wide, children }: { label: string; wide?: boolean; child
 function BrandMark() { return <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>; }
 function initials(name: string) { return name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase(); }
 function uniqueActions(actions: WorkspaceState['actions']) { return [...new Map(actions.map((action) => [action.id, action])).values()]; }
-function nextActionFor(status: ApplicationStatus) { const map: Record<ApplicationStatus, string> = { saved: 'Review the match evidence and source CV.', preparing: 'Prepare and approve application documents.', ready: 'Review the employer submission requirements.', applied: 'Record the submission date and follow-up window.', screening: 'Prepare recruiter-screening examples.', interviewing: 'Open Interview Prep and practice evidence-led answers.', offer: 'Record and compare verified offer components.', accepted: 'Begin a 30/60/90-day onboarding plan.', rejected: 'Record feedback and choose a constructive next action.', withdrawn: 'Record why this opportunity was no longer suitable.', archived: 'No action due.' }; return map[status]; }
 function stageRoute(index: number) { return ({ 0: '/profile', 2: '/cv', 3: '/jobs', 5: '/applications', 6: '/interviews' } as Record<number, string | undefined>)[index]; }
 
 // Use the outlet-aware shell in the route tree.
 function Root() {
-  const [workspace, setWorkspace] = useState<WorkspaceState>(() => loadWorkspace());
+  const [workspace, setWorkspace] = useState<WorkspaceState>(() => structuredClone(emptyWorkspace));
   const [session, setDevSession] = useState<DevSession | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [saveError,setSaveError] = useState('');
+  const [saving,setSaving]=useState(false),[savedMessage,setSavedMessage]=useState('');
+  const epoch=useRef(0);
   const current = useRef(workspace), revision = useRef(0), queue = useRef(Promise.resolve());
   const apply = (state: WorkspaceState) => { current.current = state; setWorkspace(state); };
-  const connect = async (next: DevSession) => { setSession(next); const stored = await api<{ state: WorkspaceState; revision: number }>('/workspace'); revision.current = stored.revision; apply(stored.state); setDevSession(next); setSaveError(''); };
-  const disconnect = () => { setSession(null); setDevSession(null); revision.current=0; apply(structuredClone(emptyWorkspace)); };
+  const connect = async (next: DevSession) => { epoch.current++; setSession(next); const stored = await api<{ state: WorkspaceState; revision: number }>('/workspace'); revision.current = stored.revision; apply(stored.state); setDevSession(next); setSaveError(''); };
+  const disconnect = () => { epoch.current++; setSession(null); setDevSession(null); revision.current=0; apply(structuredClone(emptyWorkspace)); };
   useEffect(() => { api<DevSession>('/auth/session').then(connect).catch(()=>{}).finally(()=>setSessionReady(true)); },[]);
   const update = (recipe: (state: WorkspaceState) => WorkspaceState) => {
+    const expectedEpoch=epoch.current;
+    setSaving(true);setSavedMessage('');
     const save = queue.current.then(async () => {
+      if (!session) throw new Error('Sign in to the local account before saving. Use synthetic data only.');
+      if(expectedEpoch!==epoch.current)throw new Error('Session changed. Review and save again.');
       const next = recipe(current.current);
-      if (session) { const stored = await api<{ state: WorkspaceState; revision: number }>('/workspace','PUT',{ state:next,revision:revision.current }); revision.current=stored.revision; apply(stored.state); }
-      else { saveWorkspace(next); apply(next); }
-      setSaveError('');
-    });
+      if (session) { const stored = await api<{ state: WorkspaceState; revision: number }>('/workspace','PUT',{ state:next,revision:revision.current }); if(expectedEpoch!==epoch.current)throw new Error('Session changed during save. Sign in again to verify the saved version.');revision.current=stored.revision; apply(stored.state); }
+      setSaveError(''); setSavedMessage('Changes saved.');
+    }).finally(()=>setSaving(false));
     queue.current = save.catch(reason=>setSaveError(reason instanceof Error ? reason.message : 'Could not save workspace.'));
     return save;
   };
   const reset = () => update(() => structuredClone(emptyWorkspace));
   const routes = { workspace, update, reset };
   if (!sessionReady) return <main className="welcome-page"><p role="status">Restoring your workspace…</p></main>;
-  return <>{saveError && <div className="global-error" role="alert">Save failed: {saveError}. Your previous saved state has been kept.</div>}<Routes>
+  return <><div className="save-status" role="status">{saving?'Saving your changes…':savedMessage}</div>{saveError && <div className="global-error" role="alert">Save failed: {saveError} Your input remains available in the form. <Link to="/agent">SIGN IN</Link> <button onClick={()=>void api<DevSession>('/auth/session').then(connect).catch(e=>setSaveError(e.message))}>RELOAD SAVED WORKSPACE</button></div>}<Routes>
     <Route path="/welcome" element={<Welcome profile={routes.workspace.profile} />} />
     <Route element={<AppOutletShell workspace={routes.workspace} authenticated={!!session} />}>
-      <Route path="/agent" element={<AgentPage workspace={workspace} session={session} connect={connect} disconnect={disconnect} />} />
+      <Route path="/agent" element={<AgentPage workspace={workspace} session={session} connect={connect} disconnect={disconnect} reload={()=>connect(session!)} />} />
       <Route index element={<Navigate to="/dashboard" replace />} />
       <Route path="/dashboard" element={<Dashboard workspace={routes.workspace} update={routes.update} />} />
-      <Route path="/profile" element={<ProfileEditor profile={routes.workspace.profile} update={routes.update} />} />
-      <Route path="/cv" element={<CvStudio workspace={routes.workspace} update={routes.update} />} />
+      <Route path="/profile" element={<><ProfileEditor profile={routes.workspace.profile} update={routes.update} /><EvidencePanel workspace={workspace} update={update} /></>} />
+      <Route path="/cv" element={<CvStudio workspace={routes.workspace} update={routes.update} reload={()=>connect(session!)} />} />
       <Route path="/jobs" element={<JobMatches workspace={routes.workspace} update={routes.update} />} />
-      <Route path="/applications" element={<Applications workspace={routes.workspace} update={routes.update} />} />
+      <Route path="/applications" element={<ApplicationsPage workspace={routes.workspace} update={routes.update} />} />
       <Route path="/interviews" element={<InterviewPrep workspace={routes.workspace} update={routes.update} />} />
       <Route path="/journey" element={<Journey workspace={routes.workspace} />} />
       <Route path="/settings" element={<Settings reset={routes.reset} authenticated={!!session} />} />

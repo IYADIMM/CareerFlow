@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ZodError } from 'zod';
 import { ApiError, Store } from './store.ts';
+import { randomUUID } from 'node:crypto';
 const allowedOrigins = new Set(['http://127.0.0.1:5173','http://127.0.0.1:4173','http://localhost:5173']);
 export function apiServer(store: Store) {
   const attempts = new Map<string, { count: number; reset: number }>();
@@ -16,6 +17,7 @@ export function apiServer(store: Store) {
     try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { throw new ApiError(400,'Invalid JSON.'); }
   };
   return createServer(async (req,res) => {
+    const requestId=randomUUID(); res.setHeader('X-Request-ID',requestId);
     try {
       const host = req.headers.host || ''; if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) throw new ApiError(403,'Local host required.');
       const path = new URL(req.url || '/',`http://${host}`).pathname;
@@ -39,6 +41,18 @@ export function apiServer(store: Store) {
         if (req.method === 'GET') return respond(res,200,store.workspace(session.principal));
         if (req.method === 'PUT') return respond(res,200,store.saveWorkspace(session.principal,await body(req)));
       }
+      if (path === '/api/documents/tailor' && req.method==='POST') return respond(res,200,store.tailor(session.principal,await body(req)));
+      const documentRoute=path.match(/^\/api\/documents\/([a-zA-Z0-9_-]+)\/download$/);
+      if (documentRoute && req.method==='GET') {
+        const document=store.document(session.principal,documentRoute[1]);
+        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','Content-Disposition':'attachment; filename="careerflow-approved.txt"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'});
+        return res.end(document.sourceText);
+      }
+      const trackRoute=path.match(/^\/api\/runs\/([0-9a-f-]{36})\/track$/);
+      if (trackRoute && req.method==='POST') {
+        const input=await body(req); if (typeof input?.vacancyId!=='string') throw new ApiError(400,'Select a prepared vacancy.');
+        return respond(res,200,store.trackDraft(session.principal,trackRoute[1],input.vacancyId));
+      }
       if (path === '/api/radar') {
         if (req.method === 'GET') return respond(res,200,store.targets(session.principal));
         if (req.method === 'PUT') return respond(res,200,store.saveTargets(session.principal,await body(req)));
@@ -54,7 +68,7 @@ export function apiServer(store: Store) {
       throw new ApiError(404,'Endpoint not found.');
     } catch (error) {
       const status = error instanceof ApiError ? error.status : error instanceof ZodError ? 400 : 500;
-      respond(res,status,{ error: error instanceof ApiError ? error.message : status===400 ? 'Check the submitted fields.' : 'The request could not be completed.' });
+      respond(res,status,{ error: error instanceof ApiError ? error.message : status===400 ? 'Check the submitted fields.' : 'The request could not be completed.',requestId });
     }
   });
 }

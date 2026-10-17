@@ -11,8 +11,14 @@ export interface AgentTool<Input, Output> {
 }
 export interface Usage { provider: 'deterministic' | 'disabled'; inputTokens: number; outputTokens: number; costCents: number }
 export interface Checkpoint { state: RunState; step: string; at: string; usage: Usage }
-export interface Draft { vacancyId: string; text: string; evidence: string[]; gaps: string[]; score: number; seniorityWarning: string | null; compensation: { score: number | null; explanation: string }; hash: string }
+export interface Draft { vacancyId: string; text: string; evidence: string[]; gaps: string[]; score: number; seniorityWarning: string | null; compensation: { score: number | null; explanation: string }; hash: string;rubricVersion?:string;requirements?:Array<{text:string;source:string;classification:'required'|'preferred'|'unknown';evidence:string;status:'match'|'partial'|'gap'|'unknown'}>;uncertainty?:string }
 export interface AgentRun {
+  inputSnapshot?: {profile:import('../../src/types.ts').CareerProfile;targets:import('../../server/store.ts').Targets;workspaceRevision:number};
+  inputHash?: string;
+  sources?: import('../agent-tools/careerflow.ts').SourceVacancy[];
+  toolCalls?: Array<{name:string;startedAt:string;endedAt:string;resultCount:number;attempts:number;outcome:'success'|'failed'}>;
+  approvalExpiresAt?: string;
+  sourceDecisions?:Array<{id:string;kind:'duplicate'|'reposted'|'updated'|'distinct';originalId?:string}>;
   id: string; tenantId: string; userId: string; goal: string; state: RunState;
   pausedFrom?: RunState; plan: string[]; checkpoints: Checkpoint[];
   drafts: Draft[]; rejectedSources: Array<{ id: string; reason: string }>;
@@ -23,7 +29,7 @@ export interface AgentRun {
   error?: string;
 }
 export const zeroUsage = (): Usage => ({ provider: 'deterministic', inputTokens: 0, outputTokens: 0, costCents: 0 });
-export const terminal = (state: RunState) => ['completed', 'cancelled', 'expired'].includes(state);
+export const terminal = (state: RunState) => ['completed', 'cancelled', 'expired','failed'].includes(state);
 
 export async function invokeTool<I,O>(tool: AgentTool<I,O>, input: I, context: ToolContext): Promise<O> {
   if (tool.action !== 'read') throw new Error('Side-effect tools are disabled; use an approval-bound action executor.');

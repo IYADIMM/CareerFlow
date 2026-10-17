@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         landing: resolve(__dirname, 'index.html'),
         app: resolve(__dirname, 'app.html'),
+        policy: resolve(__dirname, 'policy.html'),
       },
     },
   },
