@@ -5,9 +5,9 @@ Audit date: 17 October 2026. The original 2,240-line master prompt (SHA-256 `a58
 | Disposition | Count |
 |---|---:|
 | Total independently tracked requirements | 98 |
-| VERIFIED_PASSED | 46 |
+| VERIFIED_PASSED | 49 |
 | IMPLEMENTED_UNVERIFIED | 4 |
-| IN_PROGRESS | 32 |
+| IN_PROGRESS | 29 |
 | VERIFIED_FAILED | 0 |
 | BLOCKED_EXTERNAL | 5 |
 | BLOCKED_TECHNICAL | 2 |
@@ -15,6 +15,6 @@ Audit date: 17 October 2026. The original 2,240-line master prompt (SHA-256 `a58
 | NOT_STARTED | 7 |
 | DEFERRED_APPROVED | 0 |
 
-Every item has an explicit disposition in `MASTER_REQUIREMENTS_LEDGER.md`. “Accounted for” does not mean “implemented”: 46 requirements have executed evidence, while hosted Supabase/Auth/Storage, permitted live sources, binary document handling, an AI provider, staging, monitoring, billing/legal controls, and advanced P3 modules remain incomplete or blocked.
+Every item has an explicit disposition in `MASTER_REQUIREMENTS_LEDGER.md`. “Accounted for” does not mean “implemented”: 49 requirements have executed evidence, while hosted Supabase/Auth/Storage, permitted live sources, binary document handling, an AI provider, staging, monitoring, billing/legal controls, and advanced P3 modules remain incomplete or blocked.
 
 Final checks found no untracked directive. The release remains `LOCAL_SYNTHETIC_DEMO`; no owner approval was inferred, no external application/message/payment/public deployment occurred, and `main` was not merged.

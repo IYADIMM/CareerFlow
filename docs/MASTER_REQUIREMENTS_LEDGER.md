@@ -98,10 +98,10 @@ Evidence cut: 17 October 2026. Allowed status vocabulary from Directive 001 is u
 | CF-036-01 | Strict TS/lint/tests/auth/reproducible build/low cost/high-quality documentation | P0 | VERIFIED_PASSED | source/tests/docs | Final local gate | Hosted/UX claims remain scoped |
 | CF-036-02 | Measure rather than invent Lighthouse/Core Web Vitals | P2 | BLOCKED_TECHNICAL | UIUX review | No score claimed | No current Lighthouse run |
 | CF-037-01 | Re-read original, reconcile every requirement, and generate final reconciliation | P0 | VERIFIED_PASSED | `FINAL_REQUIREMENT_RECONCILIATION.md` | Count derived from this table | — |
-| CF-038-01 | Final response follows mandated 11-section structure | P0 | IN_PROGRESS | final response | Verified at handoff | — |
-| CF-039-01 | Commit/push dedicated branch, prepare PR with evidence/limits/SHA; do not merge | P0 | IN_PROGRESS | Git/GitHub | Pending final green gate | — |
+| CF-038-01 | Final response follows mandated 11-section structure | P0 | VERIFIED_PASSED | final response | Eleven-section handoff prepared | — |
+| CF-039-01 | Commit/push dedicated branch, prepare PR with evidence/limits/SHA; do not merge | P0 | VERIFIED_PASSED | Git/GitHub | Branch pushed; PR #1 attached; push CI passed | — |
 | CF-039-02 | No paid service, live billing, external application, public deployment, or main merge without approval | P0 | VERIFIED_PASSED | delivery process | No prohibited action performed | — |
-| CF-040-01 | Finish honestly: no skipped requirement or unverified claim | P0 | IN_PROGRESS | reconciliation/final response | Final audit pending | — |
+| CF-040-01 | Finish honestly: no skipped requirement or unverified claim | P0 | VERIFIED_PASSED | reconciliation/final response | Final audit and scoped classification | — |
 
 ## Dependency and acceptance notes
 

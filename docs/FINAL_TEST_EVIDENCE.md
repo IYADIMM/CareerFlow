@@ -13,5 +13,6 @@ Final evidence after the last functional source change:
 - Staging E2E/auth/private document test: not run; no staging exists.
 - Local restore drill: automated populated SQLite backup/restore test included.
 - Current-branch browser check: settings rendered at default and 390 px; no horizontal overflow. The first 390 px measurement found 14/36 px controls, which were corrected and remeasured at 44 px.
+- GitHub Actions: push run 39043433848 passed for source commit `d49fe417e20719caa7808ac485bbe8578d69d52b`; PR #1 was opened without merging.
 
 An initial sandboxed HTTP run failed only because the sandbox denied a temporary `127.0.0.1` connection (`EACCES`); the same gate passed outside that restriction. This is environment evidence, not a product defect.
