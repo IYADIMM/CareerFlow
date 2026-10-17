@@ -37,6 +37,16 @@ export function apiServer(store: Store) {
       if (req.method === 'GET' && path === '/api/auth/session') return respond(res,200,session);
       if (req.method !== 'GET' && req.headers['x-csrf-token'] !== session.csrf) throw new ApiError(403,'Session verification failed.');
       if (req.method === 'POST' && path === '/api/auth/logout') { store.logout(token); res.setHeader('Set-Cookie','cf_session=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0'); return respond(res,200,{ signedOut:true }); }
+      if (req.method === 'GET' && path === '/api/account/export') {
+        const payload=store.exportAccount(session.principal);
+        res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="careerflow-account-export.json"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'});
+        return res.end(JSON.stringify(payload,null,2));
+      }
+      if (req.method === 'POST' && path === '/api/account/delete') {
+        const result=store.deleteAccount(session.principal,await body(req));
+        res.setHeader('Set-Cookie','cf_session=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0');
+        return respond(res,200,result);
+      }
       if (path === '/api/workspace') {
         if (req.method === 'GET') return respond(res,200,store.workspace(session.principal));
         if (req.method === 'PUT') return respond(res,200,store.saveWorkspace(session.principal,await body(req)));

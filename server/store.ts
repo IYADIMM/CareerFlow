@@ -80,6 +80,44 @@ export class Store {
     return { principal: { userId: row.user_id, tenantId: row.tenant_id, role: row.role }, csrf: row.csrf, email: row.email };
   }
   logout(token: string) { this.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(digest(token)); }
+  exportAccount(principal: Principal) {
+    this.assertAccess(principal);
+    const account = this.db.prepare('SELECT email FROM users WHERE id=?').get(principal.userId) as { email: string } | undefined;
+    if (!account) throw new ApiError(404,'Account not found.');
+    return {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      account: { email: account.email, userId: principal.userId, workspaceId: principal.tenantId },
+      workspace: this.workspace(principal),
+      targetRadar: this.targets(principal),
+      agentRuns: this.runs(principal),
+      auditEvents: this.auditLog(principal),
+    };
+  }
+  deleteAccount(principal: Principal, input: unknown) {
+    this.assertAccess(principal,true);
+    const account = this.db.prepare('SELECT email FROM users WHERE id=?').get(principal.userId) as { email: string } | undefined;
+    if (!account) throw new ApiError(404,'Account not found.');
+    const { confirmation } = z.strictObject({ confirmation:z.string().max(300) }).parse(input);
+    if (confirmation !== `DELETE ${account.email}`) throw new ApiError(400,`Type DELETE ${account.email} to confirm account deletion.`);
+    const deletedAt = new Date().toISOString();
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM idempotency WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM follow_ups WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM action_receipts WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM approvals WHERE actor_id=? OR run_id IN (SELECT id FROM agent_runs WHERE tenant_id=?)').run(principal.userId,principal.tenantId);
+      this.db.prepare('DELETE FROM agent_checkpoints WHERE run_id IN (SELECT id FROM agent_runs WHERE tenant_id=?)').run(principal.tenantId);
+      this.db.prepare('DELETE FROM agent_runs WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM target_radar WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM workspaces WHERE tenant_id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM sessions WHERE user_id=? OR tenant_id=?').run(principal.userId,principal.tenantId);
+      this.db.prepare('DELETE FROM audit_events WHERE tenant_id=? OR actor_id=?').run(principal.tenantId,principal.userId);
+      this.db.prepare('DELETE FROM memberships WHERE tenant_id=? OR user_id=?').run(principal.tenantId,principal.userId);
+      this.db.prepare('DELETE FROM organizations WHERE id=?').run(principal.tenantId);
+      this.db.prepare('DELETE FROM users WHERE id=?').run(principal.userId);
+    });
+    return { deleted:true as const, deletedAt };
+  }
   workspace(principal: Principal) {
     this.assertAccess(principal);
     const row = this.db.prepare('SELECT payload,revision FROM workspaces WHERE tenant_id=?').get(principal.tenantId) as { payload: string; revision: number };

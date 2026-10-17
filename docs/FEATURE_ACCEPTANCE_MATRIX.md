@@ -16,5 +16,7 @@ Evidence date: 17 October 2026. Environment: local loopback, synthetic data, SQL
 | Applications | Track legitimate application state | Search, filters, notes, delete, confirmation form | Transition rules and submission evidence/history | Manual confirmation only | Illegal transition; duplicate; retry persistence | Working and verified locally |
 | Interviews | Prepare truthful practice notes | Role questions and notes | Saved against tracked vacancy | Deterministic | Existing unit/browser coverage | Working and verified locally |
 | Private operations | Recover local data | Operator CLI | Integrity/foreign-key checks; restored sessions revoked | SQLite | Populated backup/restore test | Working local scope |
+| Privacy controls | Export and delete local account | Settings export + exact typed deletion | CSRF, owner check, portable non-secret JSON, complete tenant/user cascade | Local API/SQLite | Store and HTTP export/deletion tests | Working and verified locally |
+| Hosted Core MVP model | Prepare production data boundary | Not connected to UI | Owner-only RLS, read-only direct grants, private object path policy | Prepared Supabase SQL | 3 static migration guardrail tests | Implemented unverified; no project |
 | Networking, assessments, offers, growth | Later career stages | Journey labels only | None | None | No false completion claim | Approved later phase |
 | Billing, agency, platform admin | Commercial operations | Disabled/unavailable | No privileged/customer endpoints | None | Protected routes return 404 | Blocked / later phase |

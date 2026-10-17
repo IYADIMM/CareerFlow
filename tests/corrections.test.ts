@@ -113,4 +113,14 @@ describe('correction regression',()=>{
       expect(recovered.document(session.principal,before.state.documents[0].id).sourceText).toBe(before.state.documents[0].sourceText);store.close();recovered.close();
     }finally{rmSync(directory,{recursive:true,force:true});}
   });
+  it('exports portable account data and requires an exact deletion confirmation',()=>{
+    const {store,session}=setup();
+    const exported=store.exportAccount(session.principal);
+    expect(exported.schemaVersion).toBe(1);expect(exported.account.email).toBe('fixture@example.test');expect(exported.workspace.state.profile?.displayName).toBe('Synthetic Example');
+    expect(JSON.stringify(exported)).not.toContain('password_hash');expect(JSON.stringify(exported)).not.toContain(session.token);
+    expect(()=>store.deleteAccount(session.principal,{confirmation:'DELETE wrong@example.test'})).toThrow('Type DELETE fixture@example.test');
+    expect(store.deleteAccount(session.principal,{confirmation:'DELETE fixture@example.test'}).deleted).toBe(true);
+    expect(()=>store.session(session.token)).toThrow('Sign in');
+    expect((store.db.prepare('SELECT count(*) AS n FROM users').get() as {n:number}).n).toBe(0);
+  });
 });
