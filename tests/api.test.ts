@@ -33,3 +33,15 @@ it('protects exact-version downloads and rejects privileged API routes and forge
   const latest=store.workspace(a.principal);expect((await fetch(base+'/api/workspace',{method:'PUT',headers:mutation,body:JSON.stringify({...latest,state:{...latest.state,organizationId:b.principal.tenantId}})})).status).toBe(400);
   store.db.prepare('DELETE FROM memberships WHERE user_id=?').run(a.principal.userId);expect((await fetch(url,{headers})).status).toBe(401);
 });
+it('exports the signed-in account and deletes it only with CSRF and exact confirmation',async()=>{
+  store=new Store(':memory:');server=apiServer(store);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const address=server.address();if(!address||typeof address==='string')throw Error('Missing port');const base=`http://127.0.0.1:${address.port}`;
+  const account=store.register({email:'privacy@example.test',password:'synthetic-password-345'}),cookie=`cf_session=${account.token}`;
+  const exported=await fetch(base+'/api/account/export',{headers:{Cookie:cookie}});expect(exported.status).toBe(200);expect(exported.headers.get('content-disposition')).toContain('careerflow-account-export.json');
+  const payload=await exported.json() as {account:{email:string}};expect(payload.account.email).toBe('privacy@example.test');
+  const headers={Cookie:cookie,Origin:'http://127.0.0.1:5173','Content-Type':'application/json','X-CSRF-Token':account.csrf};
+  expect((await fetch(base+'/api/account/delete',{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify({confirmation:'DELETE privacy@example.test'})})).status).toBe(403);
+  expect((await fetch(base+'/api/account/delete',{method:'POST',headers,body:JSON.stringify({confirmation:'DELETE wrong@example.test'})})).status).toBe(400);
+  const deleted=await fetch(base+'/api/account/delete',{method:'POST',headers,body:JSON.stringify({confirmation:'DELETE privacy@example.test'})});expect(deleted.status).toBe(200);expect(deleted.headers.get('set-cookie')).toContain('Max-Age=0');
+  expect((await fetch(base+'/api/account/export',{headers:{Cookie:cookie}})).status).toBe(401);
+});
